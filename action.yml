@@ -1,0 +1,76 @@
+name: 'ECS Deploy Action'
+description: 'Deploy an application to Amazon ECS using a simplified YAML configuration'
+
+inputs:
+  environment:
+    description: 'The environment to deploy to'
+    required: true
+  ecs_service:
+    description: 'The name of the ECS service'
+    required: true
+  image_name:
+    description: 'The name of the Docker image'
+    required: true
+  tag:
+    description: 'The tag of the Docker image'
+    required: true
+  task_config_yaml:
+    description: 'Path to the YAML file containing task configuration'
+    required: true
+  aws_account_id:
+    description: 'The AWS account ID'
+    required: true
+  aws_region:
+    description: 'The AWS region'
+    required: true
+  ecs_cluster:
+    description: 'The name of the ECS cluster'
+    required: true
+  aws_role:
+    description: 'The AWS IAM role to assume'
+    default: 'github_services'
+    required: false
+
+runs:
+  using: "composite"
+  steps:
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: "arn:aws:iam::${{ inputs.aws_account_id }}:role/${{ inputs.aws_role }}"
+        aws-region: ${{ inputs.aws_region }}
+      shell: bash
+
+    - id: login_ecr
+      uses: aws-actions/amazon-ecr-login@v2
+      shell: bash
+      
+    - id: generate-task-def
+      run: |
+        python3 ${{ github.action_path }}/scripts/generate_task_def.py \
+          ${{ inputs.task_config_yaml }} \
+          ${{ inputs.aws_region }} \
+          ${{ steps.login_ecr.outputs.registry }} \
+          ${{ inputs.image_name }} \
+          ${{ inputs.tag }}
+      shell: bash
+
+    - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.2.0
+      id: ecs-deploy
+      with:
+        task-definition: task-definition.json
+        service: ${{ inputs.ecs_service }}
+        cluster: ${{ inputs.ecs_cluster }}
+        wait-for-service-stability: true
+      shell: bash
+
+    - id: check-deployment
+      run: |
+         CURRENT_TASK_DEF_ARN=$(aws ecs describe-services --cluster ${{ inputs.ecs_cluster }} --services ${{ inputs.ecs_service }} --query services[0].deployments[0].taskDefinition | jq -r ".")
+         NEW_TASK_DEF_ARN=${{ steps.ecs-deploy.outputs.task-definition-arn }}
+         echo "Current task arn: $CURRENT_TASK_DEF_ARN"
+         echo "New task arn: $NEW_TASK_DEF_ARN"
+         if [ "$CURRENT_TASK_DEF_ARN" != "$NEW_TASK_DEF_ARN" ]; then
+           echo "Deployment failed."
+           exit 1
+         fi
+      shell: bash
