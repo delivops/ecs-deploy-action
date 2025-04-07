@@ -58,6 +58,16 @@ runs:
         task-definition: task-definition.json
         container-name: app
         image: "${{ steps.login_ecr.outputs.registry }}/${{ inputs.image_name }}:${{ inputs.tag }}"
+
+    - name: deploy the task definition to AWS
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+      with:
+        task-definition: task-definition.json
+        cluster: production
+        run-task: false
+    
+    
+    
     # - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.3.1
     #   id: ecs-deploy
     #   with:
