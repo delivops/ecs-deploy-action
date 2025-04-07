@@ -46,6 +46,7 @@ runs:
       run: |
         python3 ${{ github.action_path }}/scripts/generate_task_def.py \
           ${{ inputs.task_config_yaml }} \
+          ${{ inputs.ecs_cluster }} \
           ${{ inputs.aws_region }} \
           ${{ steps.login_ecr.outputs.registry }} \
           ${{ inputs.image_name }} \

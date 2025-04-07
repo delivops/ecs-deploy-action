@@ -59,7 +59,7 @@ def get_secret_values(secret_arn, aws_region):
         print(f"Error fetching secrets: {e}")
         return []
 
-def generate_task_definition(yaml_file_path, aws_region, registry, image_name, tag):
+def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry, image_name, tag):
     """
     Generate an ECS task definition from a simplified YAML configuration
     
@@ -78,7 +78,6 @@ def generate_task_definition(yaml_file_path, aws_region, registry, image_name, t
         config = yaml.safe_load(file)
     
     # Extract values from config
-    env_name = config.get('env', 'development')
     app_name = config.get('name', 'app')
     cpu = str(config.get('cpu', 256))
     memory = str(config.get('memory', 512))
@@ -130,9 +129,8 @@ def generate_task_definition(yaml_file_path, aws_region, registry, image_name, t
         "logConfiguration": {
             "logDriver": "awslogs",
             "options": {
-                "awslogs-group": f"/ecs/{env_name}/{app_name}",
-                "awslogs-region": aws_region,
-                "awslogs-stream-prefix": "app"
+                "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
+                "awslogs-region": aws_region
             }
         }
     }
@@ -146,7 +144,7 @@ def generate_task_definition(yaml_file_path, aws_region, registry, image_name, t
     # Add main port if specified
     if main_port:
         port_mapping = {
-            "name": f"{env_name}_{app_name}",
+            "name": f"{cluster_name}_{app_name}",
             "containerPort": main_port,
             "hostPort": main_port,
             "protocol": "tcp",
@@ -159,7 +157,7 @@ def generate_task_definition(yaml_file_path, aws_region, registry, image_name, t
         # Start index from 2 for additional ports
         index = i + 2
         port_mapping = {
-            "name": f"{env_name}_{app_name}_{index}",
+            "name": f"{cluster_name}_{app_name}_{index}",
             "containerPort": port,
             "hostPort": port,
             "protocol": "tcp",
@@ -195,8 +193,8 @@ def generate_task_definition(yaml_file_path, aws_region, registry, image_name, t
     # Create init container for env file if needed
     if has_env_file:
         # Extract the secret name from the ARN
-        secret_name = env_file_arn.split(':')[-1].split('/')[-1] if env_file_arn else f"{env_name}_{app_name}_secret"
-        file_name = f"{env_name}_{app_name}_secret"
+        secret_name = env_file_arn.split(':')[-1].split('/')[-1] if env_file_arn else f"{cluster_name}_{app_name}_secret"
+        file_name = f"{cluster_name}_{app_name}_secret"
         
         init_container = {
             "name": "init-container-for-env-file",
@@ -216,9 +214,8 @@ def generate_task_definition(yaml_file_path, aws_region, registry, image_name, t
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
-                    "awslogs-group": f"/ecs/{env_name}/{app_name}",
-                    "awslogs-region": aws_region,
-                    "awslogs-stream-prefix": "init-env-file"
+                    "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
+                    "awslogs-region": aws_region
                 }
             }
         }
@@ -260,9 +257,8 @@ def generate_task_definition(yaml_file_path, aws_region, registry, image_name, t
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
-                    "awslogs-group": f"/ecs/{env_name}/{app_name}",
-                    "awslogs-region": aws_region,
-                    "awslogs-stream-prefix": "otel-collector"
+                    "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
+                    "awslogs-region": aws_region
                 }
             }
         }
@@ -277,7 +273,7 @@ def generate_task_definition(yaml_file_path, aws_region, registry, image_name, t
             "cpuArchitecture": cpu_arch,
             "operatingSystemFamily": "LINUX"
         },
-        "family": f"{env_name}_{app_name}",
+        "family": f"{cluster_name}_{app_name}",
         "command": command,
         "entryPoint": entrypoint,
         "taskRoleArn": config.get('role_arn', ''),
@@ -295,6 +291,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Generate ECS task definition from YAML configuration')
     
     parser.add_argument('yaml_file', help='Path to the YAML configuration file')
+    parser.add_argument('cluster_name', help='The cluster name')
     parser.add_argument('aws_region', help='AWS region for log configuration')
     parser.add_argument('registry', help='ECR registry URL')
     parser.add_argument('image_name', help='Container image name')
@@ -309,6 +306,7 @@ if __name__ == "__main__":
     try:
         task_definition = generate_task_definition(
             args.yaml_file,
+            args.cluster_name,
             args.aws_region,
             args.registry,
             args.image_name,

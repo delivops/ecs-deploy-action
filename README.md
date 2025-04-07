@@ -51,7 +51,6 @@ jobs:
 Create a YAML configuration file with the following structure:
 
 ```yaml
-env: production                 # Environment name
 name: my_app                    # Application name
 cpu: 1024                       # CPU units
 memory: 8192                    # Memory in MB
@@ -76,7 +75,6 @@ secrets:
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `environment` | The environment to deploy to | Yes | |
 | `ecs_service` | The name of the ECS service | Yes | |
 | `image_name` | The name of the Docker image | Yes | |
 | `tag` | The tag of the Docker image | Yes | |
