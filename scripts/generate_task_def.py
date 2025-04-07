@@ -126,6 +126,7 @@ def generate_task_definition(yaml_file_path, aws_region, registry, image_name, t
         "essential": True,
         "environment": environment,
         "secrets": secrets,
+        "volumes": volumes,
         "logConfiguration": {
             "logDriver": "awslogs",
             "options": {
