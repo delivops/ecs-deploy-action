@@ -38,11 +38,9 @@ runs:
       with:
         role-to-assume: "arn:aws:iam::${{ inputs.aws_account_id }}:role/${{ inputs.aws_role }}"
         aws-region: ${{ inputs.aws_region }}
-      shell: bash
 
     - id: login_ecr
       uses: aws-actions/amazon-ecr-login@v2
-      shell: bash
       
     - id: generate-task-def
       run: |
@@ -61,7 +59,6 @@ runs:
         service: ${{ inputs.ecs_service }}
         cluster: ${{ inputs.ecs_cluster }}
         wait-for-service-stability: true
-      shell: bash
 
     - id: check-deployment
       run: |
