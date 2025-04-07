@@ -51,20 +51,25 @@ runs:
           ${{ inputs.image_name }} \
           ${{ inputs.tag }}
       shell: bash
-      
-    - id: render-task-definition
-      uses: aws-actions/amazon-ecs-render-task-definition@v1.6.1
-      with:
-        task-definition: task-definition.json
-        container-name: app
-        image: "${{ steps.login_ecr.outputs.registry }}/${{ inputs.image_name }}:${{ inputs.tag }}"
 
-    - name: deploy the task definition to AWS
-      uses: aws-actions/amazon-ecs-deploy-task-definition@v2
-      with:
-        task-definition: task-definition.json
-        cluster: production
-        run-task: false
+    - id: print-task-def
+      run: |
+        cat task-definition.json
+      shell: bash
+      
+    # - id: render-task-definition
+    #   uses: aws-actions/amazon-ecs-render-task-definition@v1.6.1
+    #   with:
+    #     task-definition: task-definition.json
+    #     container-name: app
+    #     image: "${{ steps.login_ecr.outputs.registry }}/${{ inputs.image_name }}:${{ inputs.tag }}"
+
+    # - name: deploy the task definition to AWS
+    #   uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+    #   with:
+    #     task-definition: task-definition.json
+    #     cluster: production
+    #     run-task: false
     
     
     
