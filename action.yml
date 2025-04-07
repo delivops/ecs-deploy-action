@@ -52,7 +52,7 @@ runs:
           ${{ inputs.tag }}
       shell: bash
       
-    - id: render the task definition
+    - id: render-task-definition
       uses: aws-actions/amazon-ecs-render-task-definition@v1.6.1
       with:
         task-definition: task-definition.json
