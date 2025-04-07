@@ -1,0 +1,33 @@
+env: production                 # Environment name
+name: my_app                    # Application name
+cpu: 1024                       # CPU units
+memory: 8192                    # Memory in MB
+include_otel_collector: true    # Include OpenTelemetry collector sidecar
+
+port: port-number            # Port number for the application
+additional_ports: 
+  - 8080
+  - 9090  # Additional ports for the application
+
+# cpu_arch: X86_64                # Optional: CPU architecture (default: X86_64)
+# otel_collector_ssm_config: otel-config.yaml  # Optional: Custom OTEL config name on SSM
+
+role_arn: arn:aws:iam::123456789:role/appTaskRole
+
+# Environment variables
+env_variables:
+  - KEY1: value1
+  - KEY2: value2
+
+# Environment variables from SSM Parameter Store  
+env_file: parameter-store-name
+
+# Secrets from AWS Secrets Manager
+secret_name: secret-manager-name
+
+# health_check:
+#   command: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+#   interval: 30
+#   timeout: 5
+#   retries: 3
+#   start_period: 60

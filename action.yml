@@ -38,11 +38,9 @@ runs:
       with:
         role-to-assume: "arn:aws:iam::${{ inputs.aws_account_id }}:role/${{ inputs.aws_role }}"
         aws-region: ${{ inputs.aws_region }}
-      shell: bash
 
     - id: login_ecr
       uses: aws-actions/amazon-ecr-login@v2
-      shell: bash
       
     - id: generate-task-def
       run: |
@@ -54,6 +52,11 @@ runs:
           ${{ inputs.tag }}
       shell: bash
 
+    - id: print-task-def
+      run: |
+        cat task-definition.json
+      shell: bash
+      
     - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.3.1
       id: ecs-deploy
       with:
@@ -61,8 +64,7 @@ runs:
         service: ${{ inputs.ecs_service }}
         cluster: ${{ inputs.ecs_cluster }}
         wait-for-service-stability: true
-      shell: bash
-
+        
     - id: check-deployment
       run: |
          CURRENT_TASK_DEF_ARN=$(aws ecs describe-services --cluster ${{ inputs.ecs_cluster }} --services ${{ inputs.ecs_service }} --query services[0].deployments[0].taskDefinition | jq -r ".")
