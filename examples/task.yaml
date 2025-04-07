@@ -1,0 +1,19 @@
+env: production
+name: my-app
+cpu: 512
+memory: 1024
+cpu_arch: ARM64
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+secret_arn: arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy
+env_file_arn: arn:aws:ssm:eu-west-1:556196322339:parameter/adot-config-global.yaml
+env_variables:
+  - NODE_ENV: production
+  - API_KEY: xyz123
+include_otel_collector: false
+otel_collector_ssm_path: /otel/config/path
+port: 8080
+additional_ports:
+  - 8081
+  - 8082
+command: ["hello"]
+entrypoint: ["world"]

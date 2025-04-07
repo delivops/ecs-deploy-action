@@ -3,6 +3,61 @@ import yaml
 import json
 import argparse
 import sys
+import boto3
+
+def get_aws_account_id():
+    """
+    Fetch the AWS Account ID of the current IAM user or role.
+    
+    Returns:
+        str: The AWS account ID.
+    """
+    sts_client = boto3.client('sts')
+    response = sts_client.get_caller_identity()
+    return response['Account']
+
+def get_secret_values(secret_arn, aws_region):
+    """
+    Fetch all key-value pairs from AWS Secrets Manager based on ARN and return as a list of dictionaries.
+    
+    Args:
+        secret_arn (str): ARN of the secret in Secrets Manager.
+        aws_region (str): AWS region where the secret is stored.
+    
+    Returns:
+        list: List of dictionaries containing name-value pairs for ECS secrets.
+    """
+    # Initialize the Secrets Manager client
+    client = boto3.client('secretsmanager', region_name=aws_region)
+    
+    # Get the AWS Account ID
+    account_id = get_aws_account_id()
+    
+    try:
+        # Get the secret value using the ARN
+        response = client.get_secret_value(SecretId=secret_arn)
+        
+        # Secrets Manager returns either 'SecretString' or 'SecretBinary'
+        if 'SecretString' in response:
+            secret = response['SecretString']
+            secrets_dict = json.loads(secret)
+            
+            # Format the secrets for ECS (using ARN structure)
+            formatted_secrets = []
+            for key, value in secrets_dict.items():
+                formatted_secrets.append({
+                    "name": key,
+                    "valueFrom": f"arn:aws:secretsmanager:{aws_region}:{account_id}:secret:{secret_arn.split(':')[-1]}-{key}::{key}"
+                })
+            return formatted_secrets
+        
+        else:
+            # Handle the case where the secret is binary
+            raise ValueError("Secret is stored as binary, which is unsupported in this example")
+    
+    except Exception as e:
+        print(f"Error fetching secrets: {e}")
+        return []
 
 def generate_task_definition(yaml_file_path, aws_region, registry, image_name, tag):
     """
@@ -17,7 +72,7 @@ def generate_task_definition(yaml_file_path, aws_region, registry, image_name, t
     
     Returns:
         dict: The generated task definition
-    """
+    """ 
     # Read the YAML file
     with open(yaml_file_path, 'r') as file:
         config = yaml.safe_load(file)
@@ -30,25 +85,37 @@ def generate_task_definition(yaml_file_path, aws_region, registry, image_name, t
     include_otel = config.get('include_otel_collector', False)
     otel_collector_ssm_path = config.get('otel_collector_ssm_path', 'adot-config-global.yaml')
     cpu_arch = config.get('cpu_arch', 'X86_64')
+    command = config.get('command', [])
+    entrypoint = config.get('entrypoint', [])
     
+
     # Get environment variables
     environment = []
-    for env_var in config.get('env', []):
+    for env_var in config.get('env_variables', []):
         for key, value in env_var.items():
             environment.append({
                 "name": key,
                 "value": value
             })
     
-    # Get secrets
+    # Get secrets using the ARN from config
     secrets = []
-    for secret in config.get('secrets', []):
-        for key, value in secret.items():
-            secrets.append({
-                "name": key,
-                "valueFrom": value
-            })
+    secret_arn = config.get('secret_arn', '')
+    if secret_arn:
+        secrets.extend(get_secret_values(secret_arn, aws_region))
     
+    # Check for SSM file configuration
+    env_file_arn = config.get('env_file_arn', '')
+    has_env_file = bool(env_file_arn)
+    
+    # Create shared volume for SSM files if needed
+    volumes = []
+    if has_env_file:
+        volumes.append({
+            "name": "shared-volume",
+            "host": {}
+        })
+
     # Build the full image URI
     image_uri = f"{registry}/{image_name}:{tag}"
     
@@ -68,12 +135,96 @@ def generate_task_definition(yaml_file_path, aws_region, registry, image_name, t
             }
         }
     }
+
+    # Handle port configurations
+    main_port = config.get('port')
+    additional_ports = config.get('additional_ports', [])
+    
+    port_mappings = []
+    
+    # Add main port if specified
+    if main_port:
+        port_mapping = {
+            "name": f"{env_name}_{app_name}",
+            "containerPort": main_port,
+            "hostPort": main_port,
+            "protocol": "tcp",
+            "appProtocol": "http"
+        }
+        port_mappings.append(port_mapping)
+    
+    # Add additional ports if specified
+    for i, port in enumerate(additional_ports):
+        # Start index from 2 for additional ports
+        index = i + 2
+        port_mapping = {
+            "name": f"{env_name}_{app_name}_{index}",
+            "containerPort": port,
+            "hostPort": port,
+            "protocol": "tcp",
+            "appProtocol": "http"
+        }
+        port_mappings.append(port_mapping)
+    
+    if port_mappings:
+        app_container["portMappings"] = port_mappings
+    
+    # Add mount points if using shared volume
+    if has_env_file:
+        app_container["mountPoints"] = [
+            {
+                "sourceVolume": "shared-volume",
+                "containerPath": "/etc/secrets"
+            }
+        ]
+        
+        # Add dependency on init containers
+        app_container["dependsOn"] = [
+            {
+                "containerName": "init-container-for-env-file",
+                "condition": "SUCCESS"
+            }
+        ]
     
     print(f"Setting container image to: {image_uri}")
     
-    # Create the container definitions list
-    container_definitions = [app_container]
+     # Create the container definitions list
+    container_definitions = []
     
+    # Create init container for env file if needed
+    if has_env_file:
+        # Extract the secret name from the ARN
+        secret_name = env_file_arn.split(':')[-1].split('/')[-1] if env_file_arn else f"{env_name}_{app_name}_secret"
+        file_name = f"{env_name}_{app_name}_secret"
+        
+        init_container = {
+            "name": "init-container-for-env-file",
+            "image": "amazon/aws-cli",
+            "essential": False,
+            "entryPoint": ["/bin/sh"],
+            "command": [
+                "-c",
+                f"aws secretsmanager get-secret-value --secret-id {secret_name} --region {aws_region} --query SecretString --output text > /etc/secrets/{file_name}"
+            ],
+            "mountPoints": [
+                {
+                    "sourceVolume": "shared-volume",
+                    "containerPath": "/etc/secrets"
+                }
+            ],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": f"/ecs/{env_name}/{app_name}",
+                    "awslogs-region": aws_region,
+                    "awslogs-stream-prefix": "init-env-file"
+                }
+            }
+        }
+        container_definitions.append(init_container)
+    
+    # Add the main application container
+    container_definitions.append(app_container)
     # Add the OpenTelemetry collector container if specified
     if include_otel:
         otel_container = {
@@ -102,7 +253,7 @@ def generate_task_definition(yaml_file_path, aws_region, registry, image_name, t
             "secrets": [
                 {
                     "name": "SSM_CONFIG",
-                    "valueFrom": otel_collector_ssm_config
+                    "valueFrom": otel_collector_ssm_path
                 }
             ],
             "logConfiguration": {
@@ -126,6 +277,8 @@ def generate_task_definition(yaml_file_path, aws_region, registry, image_name, t
             "operatingSystemFamily": "LINUX"
         },
         "family": f"{env_name}_{app_name}",
+        "command": command,
+        "entryPoint": entrypoint,
         "taskRoleArn": config.get('role_arn', ''),
         "executionRoleArn": config.get('role_arn', ''),
         "networkMode": "awsvpc",

@@ -1,0 +1,169 @@
+{
+  "containerDefinitions": [
+    {
+      "name": "init-container-for-env-file",
+      "image": "amazon/aws-cli",
+      "essential": false,
+      "entryPoint": ["/bin/sh"],
+      "command": [
+        "-c",
+        "aws secretsmanager get-secret-value --secret-id adot-config-global.yaml --region eu-west-1 --query SecretString --output text > /etc/secrets/production_my-app_secret"
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "shared-volume",
+          "containerPath": "/etc/secrets"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/production/my-app",
+          "awslogs-region": "eu-west-1",
+          "awslogs-stream-prefix": "init-env-file"
+        }
+      }
+    },
+    {
+      "name": "app",
+      "image": "123456789012.dkr.ecr.eu-west-1.amazonaws.com/my-app:latest",
+      "essential": true,
+      "environment": [
+        {
+          "name": "NODE_ENV",
+          "value": "production"
+        },
+        {
+          "name": "API_KEY",
+          "value": "xyz123"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "AVATRADE_SLACK_WEBHOOK_GATUS",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-AVATRADE_SLACK_WEBHOOK_GATUS::AVATRADE_SLACK_WEBHOOK_GATUS"
+        },
+        {
+          "name": "DELIVOPS_SLACK_WEBHOOK_GATUS",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-DELIVOPS_SLACK_WEBHOOK_GATUS::DELIVOPS_SLACK_WEBHOOK_GATUS"
+        },
+        {
+          "name": "FLYCOMM_SLACK_WEBHOOK_GATUS",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-FLYCOMM_SLACK_WEBHOOK_GATUS::FLYCOMM_SLACK_WEBHOOK_GATUS"
+        },
+        {
+          "name": "HELFY_SLACK_WEBHOOK_GATUS",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-HELFY_SLACK_WEBHOOK_GATUS::HELFY_SLACK_WEBHOOK_GATUS"
+        },
+        {
+          "name": "DELIVOPS_API_KEY_GROUNDCOVER",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-DELIVOPS_API_KEY_GROUNDCOVER::DELIVOPS_API_KEY_GROUNDCOVER"
+        },
+        {
+          "name": "AVATRADE_API_KEY_GROUNDCOVER",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-AVATRADE_API_KEY_GROUNDCOVER::AVATRADE_API_KEY_GROUNDCOVER"
+        },
+        {
+          "name": "FLYCOMM_IDF_API_KEY_GROUNDCOVER",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-FLYCOMM_IDF_API_KEY_GROUNDCOVER::FLYCOMM_IDF_API_KEY_GROUNDCOVER"
+        },
+        {
+          "name": "FLYCOMM_MAIN_API_KEY_GROUNDCOVER",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-FLYCOMM_MAIN_API_KEY_GROUNDCOVER::FLYCOMM_MAIN_API_KEY_GROUNDCOVER"
+        },
+        {
+          "name": "VINESIGHT_API_KEY_GROUNDCOVER",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-VINESIGHT_API_KEY_GROUNDCOVER::VINESIGHT_API_KEY_GROUNDCOVER"
+        },
+        {
+          "name": "HELFY_API_KEY_GROUNDCOVER",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-HELFY_API_KEY_GROUNDCOVER::HELFY_API_KEY_GROUNDCOVER"
+        },
+        {
+          "name": "VINESIGHT_SLACK_WEBHOOK_GATUS",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-VINESIGHT_SLACK_WEBHOOK_GATUS::VINESIGHT_SLACK_WEBHOOK_GATUS"
+        },
+        {
+          "name": "DELIVOPS_OPSGENIE_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-DELIVOPS_OPSGENIE_API_KEY::DELIVOPS_OPSGENIE_API_KEY"
+        },
+        {
+          "name": "VINESIGHT_OPSGENIE_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-VINESIGHT_OPSGENIE_API_KEY::VINESIGHT_OPSGENIE_API_KEY"
+        },
+        {
+          "name": "FLYCOMM_OPSGENIE_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-FLYCOMM_OPSGENIE_API_KEY::FLYCOMM_OPSGENIE_API_KEY"
+        },
+        {
+          "name": "AVATRADE_OPSGENIE_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-AVATRADE_OPSGENIE_API_KEY::AVATRADE_OPSGENIE_API_KEY"
+        },
+        {
+          "name": "HELFY_OPSGENIE_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-HELFY_OPSGENIE_API_KEY::HELFY_OPSGENIE_API_KEY"
+        },
+        {
+          "name": "fail",
+          "valueFrom": "arn:aws:secretsmanager:eu-west-1:556196322339:secret:gatus-J2K1Oy-fail::fail"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/production/my-app",
+          "awslogs-region": "eu-west-1",
+          "awslogs-stream-prefix": "app"
+        }
+      },
+      "portMappings": [
+        {
+          "name": "production_my-app",
+          "containerPort": 8080,
+          "hostPort": 8080,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        },
+        {
+          "name": "production_my-app_2",
+          "containerPort": 8081,
+          "hostPort": 8081,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        },
+        {
+          "name": "production_my-app_3",
+          "containerPort": 8082,
+          "hostPort": 8082,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "shared-volume",
+          "containerPath": "/etc/secrets"
+        }
+      ],
+      "dependsOn": [
+        {
+          "containerName": "init-container-for-env-file",
+          "condition": "SUCCESS"
+        }
+      ]
+    }
+  ],
+  "cpu": "512",
+  "memory": "1024",
+  "runtimePlatform": {
+    "cpuArchitecture": "ARM64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "family": "production_my-app",
+  "command": ["hello"],
+  "entryPoint": ["world"],
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"]
+}
