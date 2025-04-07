@@ -230,7 +230,7 @@ def generate_task_definition(yaml_file_path, aws_region, registry, image_name, t
     if include_otel:
         otel_container = {
             "name": "otel-collector",
-            "image": "otel/opentelemetry-collector-contrib",
+            "image": "public.ecr.aws/aws-observability/aws-otel-collector:v0.43.1",
             "portMappings": [
                 {
                     "name": "otel-collector-4317-tcp",
