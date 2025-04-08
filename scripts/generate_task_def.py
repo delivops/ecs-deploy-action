@@ -156,7 +156,14 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
             "entryPoint": ["/bin/sh"],
             "command": [
                 "-c",
-                "for secret in ${SECRET_FILES//,/ }; do aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretString --output text > /etc/secrets/$secret; done"
+                "for secret in ${SECRET_FILES//,/ }; do "
+                "echo \"Fetching $secret...\"; "
+                "aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretString --output text > /etc/secrets/$secret; "
+                "if [ $? -eq 0 ] && [ -s /etc/secrets/$secret ]; then "
+                "echo \"✅ Successfully saved $secret to /etc/secrets/$secret\"; "
+                "else echo \"❌ Failed to save $secret\" >&2; exit 1; "
+                "fi; "
+                "done"
             ],
             "environment": [
                 {
