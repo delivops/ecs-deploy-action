@@ -3,61 +3,7 @@ import yaml
 import json
 import argparse
 import sys
-import boto3
-
-def get_aws_account_id():
-    """
-    Fetch the AWS Account ID of the current IAM user or role.
-    
-    Returns:
-        str: The AWS account ID.
-    """
-    sts_client = boto3.client('sts')
-    response = sts_client.get_caller_identity()
-    return response['Account']
-
-def get_secret_values(secret_arn, aws_region):
-    """
-    Fetch all key-value pairs from AWS Secrets Manager based on ARN and return as a list of dictionaries.
-    
-    Args:
-        secret_arn (str): ARN of the secret in Secrets Manager.
-        aws_region (str): AWS region where the secret is stored.
-    
-    Returns:
-        list: List of dictionaries containing name-value pairs for ECS secrets.
-    """
-    # Initialize the Secrets Manager client
-    client = boto3.client('secretsmanager', region_name=aws_region)
-    
-    # Get the AWS Account ID
-    account_id = get_aws_account_id()
-    
-    try:
-        # Get the secret value using the ARN
-        response = client.get_secret_value(SecretId=secret_arn)
-        
-        # Secrets Manager returns either 'SecretString' or 'SecretBinary'
-        if 'SecretString' in response:
-            secret = response['SecretString']
-            secrets_dict = json.loads(secret)
-            
-            # Format the secrets for ECS (using ARN structure)
-            formatted_secrets = []
-            for key, value in secrets_dict.items():
-                formatted_secrets.append({
-                    "name": key,
-                    "valueFrom": f"arn:aws:secretsmanager:{aws_region}:{account_id}:secret:{secret_arn.split(':')[-1]}-{key}::{key}"
-                })
-            return formatted_secrets
-        
-        else:
-            # Handle the case where the secret is binary
-            raise ValueError("Secret is stored as binary, which is unsupported in this example")
-    
-    except Exception as e:
-        print(f"Error fetching secrets: {e}")
-        return []
+import os
 
 def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry, image_name, tag):
     """
@@ -87,29 +33,35 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
     
-
-    # Get environment variables
+    # Extract replicaCount for later use in the GitHub Action
+    replica_count = config.get('replicaCount', 1)
+    
+    # Get environment variables (changed from env_variables to envs)
     environment = []
-    for env_var in config.get('env_variables', []):
+    for env_var in config.get('envs', []):
         for key, value in env_var.items():
             environment.append({
                 "name": key,
                 "value": value
             })
     
-    # Get secrets using the ARN from config
+    # Get secrets directly from YAML without AWS access
     secrets = []
-    secret_arn = config.get('secret_arn', '')
-    if secret_arn:
-        secrets.extend(get_secret_values(secret_arn, aws_region))
+    secret_list = config.get('secrets', [])
+    for secret_dict in secret_list:
+        for key, arn in secret_dict.items():
+            secrets.append({
+                "name": key,
+                "valueFrom": arn
+            })
     
-    # Check for SSM file configuration
-    env_file_arn = config.get('env_file_arn', '')
-    has_env_file = bool(env_file_arn)
+    # Check for secret_files configuration (multiple files now supported)
+    secret_files = config.get('secret_files', [])
+    has_secret_files = len(secret_files) > 0
     
-    # Create shared volume for SSM files if needed
+    # Create shared volume for secret files if needed
     volumes = []
-    if has_env_file:
+    if has_secret_files:
         volumes.append({
             "name": "shared-volume",
             "host": {}
@@ -131,21 +83,21 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
             "options": {
                 "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
                 "awslogs-region": aws_region,
-                "awslogs-stream-prefix": "/"
+                "awslogs-stream-prefix": "/default"
             }
         }
     }
 
-    # Handle port configurations
+    # Handle port configurations with new naming
     main_port = config.get('port')
     additional_ports = config.get('additional_ports', [])
     
     port_mappings = []
     
-    # Add main port if specified
+    # Add main port if specified with default name
     if main_port:
         port_mapping = {
-            "name": f"{cluster_name}_{app_name}",
+            "name": "default",
             "containerPort": main_port,
             "hostPort": main_port,
             "protocol": "tcp",
@@ -153,24 +105,25 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
         }
         port_mappings.append(port_mapping)
     
-    # Add additional ports if specified
-    for i, port in enumerate(additional_ports):
-        # Start index from 2 for additional ports
-        index = i + 2
-        port_mapping = {
-            "name": f"{cluster_name}_{app_name}_{index}",
-            "containerPort": port,
-            "hostPort": port,
-            "protocol": "tcp",
-            "appProtocol": "http"
-        }
-        port_mappings.append(port_mapping)
+    # Add additional ports with their specified names
+    for port_info in additional_ports:
+        if isinstance(port_info, dict):
+            # Each item is expected to be a dict with one key-value pair
+            for name, port in port_info.items():
+                port_mapping = {
+                    "name": name,
+                    "containerPort": port,
+                    "hostPort": port,
+                    "protocol": "tcp",
+                    "appProtocol": "http"
+                }
+                port_mappings.append(port_mapping)
     
     if port_mappings:
         app_container["portMappings"] = port_mappings
     
     # Add mount points if using shared volume
-    if has_env_file:
+    if has_secret_files:
         app_container["mountPoints"] = [
             {
                 "sourceVolume": "shared-volume",
@@ -181,30 +134,47 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
         # Add dependency on init containers
         app_container["dependsOn"] = [
             {
-                "containerName": "init-container-for-env-file",
+                "containerName": "init-container-for-secret-files",
                 "condition": "SUCCESS"
             }
         ]
     
     print(f"Setting container image to: {image_uri}")
     
-     # Create the container definitions list
+    # Create the container definitions list
     container_definitions = []
     
-    # Create init container for env file if needed
-    if has_env_file:
-        # Extract the secret name from the ARN
-        secret_name = env_file_arn.split(':')[-1].split('/')[-1] if env_file_arn else f"{cluster_name}_{app_name}_secret"
-        file_name = f"{cluster_name}_{app_name}_secret"
+    # Create init container for secret files if needed
+    if has_secret_files:
+        # Prepare the list of secret ARNs for the environment variable
+        secret_file_arns = []
+        for secret_file in secret_files:
+            for _, arn in secret_file.items():
+                # Extract just the secret name from the ARN for the filename
+                secret_name = arn.split(':')[-1].split('/')[-1]
+                secret_file_arns.append(secret_name)
+        
+        # Join secret names with commas for the environment variable
+        secret_files_env = ",".join(secret_file_arns)
         
         init_container = {
-            "name": "init-container-for-env-file",
+            "name": "init-container-for-secret-files",
             "image": "amazon/aws-cli",
             "essential": False,
             "entryPoint": ["/bin/sh"],
             "command": [
                 "-c",
-                f"aws secretsmanager get-secret-value --secret-id {secret_name} --region {aws_region} --query SecretString --output text > /etc/secrets/{file_name}"
+                "for secret in ${SECRET_FILES//,/ }; do aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretString --output text > /etc/secrets/$secret; done"
+            ],
+            "environment": [
+                {
+                    "name": "SECRET_FILES",
+                    "value": secret_files_env
+                },
+                {
+                    "name": "AWS_REGION",
+                    "value": aws_region
+                }
             ],
             "mountPoints": [
                 {
@@ -224,6 +194,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
     
     # Add the main application container
     container_definitions.append(app_container)
+    
     # Add the OpenTelemetry collector container if specified
     if include_otel:
         otel_container = {
@@ -275,8 +246,6 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
             "operatingSystemFamily": "LINUX"
         },
         "family": f"{cluster_name}_{app_name}",
-        "command": command,
-        "entryPoint": entrypoint,
         "taskRoleArn": config.get('role_arn', ''),
         "executionRoleArn": config.get('role_arn', ''),
         "networkMode": "awsvpc",
@@ -284,6 +253,14 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
             "FARGATE"
         ]
     }
+    
+    # Add volumes if needed
+    if has_secret_files and volumes:
+        task_definition["volumes"] = volumes
+    
+    # Output the replica count to a file for use in the GitHub Action
+    with open('replica-count.txt', 'w') as f:
+        f.write(str(replica_count))
     
     return task_definition
 
