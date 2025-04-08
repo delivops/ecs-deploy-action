@@ -33,8 +33,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
     
-    # Extract replicaCount for later use in the GitHub Action
-    replica_count = config.get('replicaCount', 1)
+    # Extract replica_count for later use in the GitHub Action
+    replica_count = config.get('replica_count', '')
     
     # Get environment variables (changed from env_variables to envs)
     environment = []
@@ -82,8 +82,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
             "options": {
                 "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
                 "awslogs-region": aws_region,
-                "awslogs-stream-prefix": "/default",
-                "awslogs-create-group": "true"
+                "awslogs-stream-prefix": "/default"
             }
         }
     }
@@ -186,9 +185,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
                 "options": {
                     "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
                     "awslogs-region": aws_region,
-                    "awslogs-stream-prefix": "ssm-file-downloader",
-                    "awslogs-create-group": "true"
-                }
+                    "awslogs-stream-prefix": "ssm-file-downloader"                
+                    }
             }
         }
         container_definitions.append(init_container)
@@ -259,10 +257,9 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
     if has_secret_files and volumes:
         task_definition["volumes"] = volumes
     
-    # Output the replica count to a file for use in the GitHub Action
-    with open('replica-count.txt', 'w') as f:
-        f.write(str(replica_count))
-    
+    # Output the replica count to output
+    print(f"::set-output name=replica_count::{replica_count}")
+
     return task_definition
 
 def parse_args():
@@ -295,6 +292,10 @@ if __name__ == "__main__":
         # Write to the specified output file
         with open(args.output, 'w') as file:
             json.dump(task_definition, file, indent=2)
+
+        print("\n----- Task Definition -----")
+        print(json.dumps(task_definition, indent=2))
+        print("---------------------------\n")
             
         print(f"Task definition successfully written to {args.output}")
         

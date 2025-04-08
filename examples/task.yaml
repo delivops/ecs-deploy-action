@@ -1,5 +1,5 @@
 name: app
-replicaCount: 2
+replica_count: 2
 cpu: 512
 memory: 1024
 cpu_arch: ARM64

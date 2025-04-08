@@ -57,12 +57,6 @@ runs:
       run: |
         cat task-definition.json
       shell: bash
-      
-    - id: read-replica-count
-      run: |
-        REPLICA_COUNT=$(cat replica-count.txt)
-        echo "replica_count=$REPLICA_COUNT" >> $GITHUB_OUTPUT
-      shell: bash  
 
     - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.3.1
       id: ecs-deploy
@@ -70,7 +64,7 @@ runs:
         task-definition: task-definition.json
         service: ${{ inputs.ecs_service }}
         cluster: ${{ inputs.ecs_cluster }}
-        desired-count: ${{ steps.read-replica-count.outputs.replica_count }}
+        desired-count: ${{ steps.generate-task-def.outputs.replica_count }}
         wait-for-service-stability: true
         
     - id: check-deployment
