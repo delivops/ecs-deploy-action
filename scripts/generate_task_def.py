@@ -49,10 +49,10 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
     secrets = []
     secret_list = config.get('secrets', [])
     for secret_dict in secret_list:
-        for key, arn in secret_dict.items():
+        for key, base_arn in secret_dict.items():
             secrets.append({
                 "name": key,
-                "valueFrom": arn
+                "valueFrom": f"{base_arn}:{key}::"
             })
     
     # Check for secret_files configuration (multiple files now supported)
@@ -146,16 +146,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
     
     # Create init container for secret files if needed
     if has_secret_files:
-        # Prepare the list of secret ARNs for the environment variable
-        secret_file_arns = []
-        for secret_file in secret_files:
-            for _, arn in secret_file.items():
-                # Extract just the secret name from the ARN for the filename
-                secret_name = arn.split(':')[-1].split('/')[-1]
-                secret_file_arns.append(secret_name)
-        
         # Join secret names with commas for the environment variable
-        secret_files_env = ",".join(secret_file_arns)
+        secret_files_env = ",".join(secret_files)
         
         init_container = {
             "name": "init-container-for-secret-files",
@@ -186,12 +178,13 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
                 "logDriver": "awslogs",
                 "options": {
                     "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
-                    "awslogs-region": aws_region
+                    "awslogs-region": aws_region,
+                    "awslogs-stream-prefix": "ssm-file-downloader"
                 }
             }
         }
         container_definitions.append(init_container)
-    
+
     # Add the main application container
     container_definitions.append(app_container)
     
