@@ -62,29 +62,25 @@ runs:
       run: |
         REPLICA_COUNT=$(cat replica-count.txt)
         echo "replica_count=$REPLICA_COUNT" >> $GITHUB_OUTPUT
-      shell: bash
-    - id: print
-      run: |
-        echo "${{ steps.read-replica-count.outputs.replica_count }}"
-      shell: bash      
+      shell: bash  
 
-    # - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.3.1
-    #   id: ecs-deploy
-    #   with:
-    #     task-definition: task-definition.json
-    #     service: ${{ inputs.ecs_service }}
-    #     cluster: ${{ inputs.ecs_cluster }}
-    #     desired-count: ${{ steps.read-replica-count.outputs.replica_count }}
-    #     wait-for-service-stability: true
+    - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.3.1
+      id: ecs-deploy
+      with:
+        task-definition: task-definition.json
+        service: ${{ inputs.ecs_service }}
+        cluster: ${{ inputs.ecs_cluster }}
+        desired-count: ${{ steps.read-replica-count.outputs.replica_count }}
+        wait-for-service-stability: true
         
-    # - id: check-deployment
-    #   run: |
-    #      CURRENT_TASK_DEF_ARN=$(aws ecs describe-services --cluster ${{ inputs.ecs_cluster }} --services ${{ inputs.ecs_service }} --query services[0].deployments[0].taskDefinition | jq -r ".")
-    #      NEW_TASK_DEF_ARN=${{ steps.ecs-deploy.outputs.task-definition-arn }}
-    #      echo "Current task arn: $CURRENT_TASK_DEF_ARN"
-    #      echo "New task arn: $NEW_TASK_DEF_ARN"
-    #      if [ "$CURRENT_TASK_DEF_ARN" != "$NEW_TASK_DEF_ARN" ]; then
-    #        echo "Deployment failed."
-    #        exit 1
-    #      fi
-    #   shell: bash
+    - id: check-deployment
+      run: |
+         CURRENT_TASK_DEF_ARN=$(aws ecs describe-services --cluster ${{ inputs.ecs_cluster }} --services ${{ inputs.ecs_service }} --query services[0].deployments[0].taskDefinition | jq -r ".")
+         NEW_TASK_DEF_ARN=${{ steps.ecs-deploy.outputs.task-definition-arn }}
+         echo "Current task arn: $CURRENT_TASK_DEF_ARN"
+         echo "New task arn: $NEW_TASK_DEF_ARN"
+         if [ "$CURRENT_TASK_DEF_ARN" != "$NEW_TASK_DEF_ARN" ]; then
+           echo "Deployment failed."
+           exit 1
+         fi
+      shell: bash

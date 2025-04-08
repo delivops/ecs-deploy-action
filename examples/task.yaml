@@ -1,18 +1,19 @@
-name: my-app
+name: app
+replicaCount: 2
 cpu: 512
 memory: 1024
 cpu_arch: ARM64
 role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
 secrets: 
-  - CLIENT_ID: arn:aws:secretsmanager:eu-west-1:xxx:secret:gatus-J2K1Oy
-  - CLIENT_NAME: arn:aws:secretsmanager:eu-west-1:xxx:secret:gatus-J2K1Oy
+  - CLIENT_ID: arn:aws:secretsmanager::secret:ava-cortex-analyst-production-IhUQht
+  - CLIENT_NAME: arn:aws:secretsmanager::secret:ava-cortex-analyst-production-IhUQht
 secret_files: 
-  - name1
+  - snowflake-1
+  - other-secret-name
 envs:
   - NODE_ENV: production
   - API_KEY: xyz123
 include_otel_collector: false
-otel_collector_ssm_path: /otel/config/path
 port: 8080
 additional_ports:
   - name: 8081
