@@ -82,7 +82,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
             "options": {
                 "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
                 "awslogs-region": aws_region,
-                "awslogs-stream-prefix": "/default"
+                "awslogs-stream-prefix": "/default",
+                "awslogs-create-group": "true"
             }
         }
     }
@@ -178,7 +179,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
                 "options": {
                     "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
                     "awslogs-region": aws_region,
-                    "awslogs-stream-prefix": "ssm-file-downloader"
+                    "awslogs-stream-prefix": "ssm-file-downloader",
+                    "awslogs-create-group": "true"
                 }
             }
         }
