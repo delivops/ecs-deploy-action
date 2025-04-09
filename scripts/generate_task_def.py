@@ -244,6 +244,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
             "cpuArchitecture": cpu_arch,
             "operatingSystemFamily": "LINUX"
         },
+        "command": command,
+        "entryPoint": entrypoint,
         "family": f"{cluster_name}_{app_name}",
         "taskRoleArn": config.get('role_arn', ''),
         "executionRoleArn": config.get('role_arn', ''),
