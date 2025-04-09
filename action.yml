@@ -30,6 +30,10 @@ inputs:
     description: 'The AWS IAM role to assume'
     default: 'github_services'
     required: false
+  dry_run:
+    description: 'Whether to perform a dry run'
+    default: 'false'
+    required: false  
 
 runs:
   using: "composite"
@@ -53,12 +57,8 @@ runs:
           ${{ inputs.tag }}
       shell: bash
 
-    - id: print-task-def
-      run: |
-        cat task-definition.json
-      shell: bash
-
     - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.3.1
+      if: ${{ inputs.dry_run }} == 'false'
       id: ecs-deploy
       with:
         task-definition: task-definition.json
@@ -68,6 +68,7 @@ runs:
         wait-for-service-stability: true
         
     - id: check-deployment
+      if: ${{ inputs.dry_run }} == 'false'
       run: |
          CURRENT_TASK_DEF_ARN=$(aws ecs describe-services --cluster ${{ inputs.ecs_cluster }} --services ${{ inputs.ecs_service }} --query services[0].deployments[0].taskDefinition | jq -r ".")
          NEW_TASK_DEF_ARN=${{ steps.ecs-deploy.outputs.task-definition-arn }}
