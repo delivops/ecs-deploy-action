@@ -32,6 +32,13 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
     cpu_arch = config.get('cpu_arch', 'X86_64')
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
+    # Extract health check configuration
+    health_check = config.get('health_check', {})
+    health_check_command = ["CMD-SHELL", health_check.get('command', '')]
+    health_check_interval = health_check.get('interval', 30)
+    health_check_timeout = health_check.get('timeout', 5)
+    health_check_retries = health_check.get('retries', 3)
+    health_check_start_period = health_check.get('start_period', 10)
     
     # Extract replica_count for later use in the GitHub Action
     replica_count = config.get('replica_count', '')
@@ -70,6 +77,14 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
     # Build the full image URI
     image_uri = f"{registry}/{image_name}:{tag}"
     
+    # Create health check configuration
+    health = {
+        "command": health_check_command,
+        "interval": health_check_interval,
+        "timeout": health_check_timeout,
+        "retries": health_check_retries,
+        "startPeriod": health_check_start_period
+    }
     # Create app container definition
     app_container = {
         "name": "app",
@@ -86,7 +101,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
                 "awslogs-region": aws_region,
                 "awslogs-stream-prefix": "/default"
             }
-        }
+        },
+    "healthCheck": health,
     }
 
     # Handle port configurations with new naming
