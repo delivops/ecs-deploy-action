@@ -32,7 +32,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
     cpu_arch = config.get('cpu_arch', 'X86_64')
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
-
+    health_check = config.get('health_check', {})
     # Only build health check if config has values and command is non-empty
     if health_check and health_check.get('command'):
         health = {
