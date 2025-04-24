@@ -5,7 +5,7 @@ import argparse
 import sys
 import os
 
-def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry, image_name, tag):
+def generate_task_definition(yaml_file_path, cluster_name, aws_region, image_name, tag, registry=''):
     """
     Generate an ECS task definition from a simplified YAML configuration
     
@@ -80,7 +80,10 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
         })
 
     # Build the full image URI
-    image_uri = f"{registry}/{image_name}:{tag}"
+    if registry:
+        image_uri = f"{registry}/{image_name}:{tag}"
+    else:
+        image_uri = f"{image_name}:{tag}"
     
 
     # Create app container definition
