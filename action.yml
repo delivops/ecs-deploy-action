@@ -52,9 +52,9 @@ runs:
     - id: define-registry
       run: |
         if [ "${{ inputs.ecr-registry }}" == "true" ]; then
-          echo "::set-output name=registry::${{ steps.login_ecr.outputs.registry }}"
+          echo "registry=${{ steps.login_ecr.outputs.registry }}" >> $GITHUB_OUTPUT
         else
-          echo "::set-output name=registry::false"
+          echo "registry=" >> $GITHUB_OUTPUT
         fi
       shell: bash
       

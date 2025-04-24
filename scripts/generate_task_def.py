@@ -80,7 +80,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, image_nam
         })
 
     # Build the full image URI
-    if registry != 'false':
+    if registry:
         image_uri = f"{registry}/{image_name}:{tag}"
     else:
         image_uri = f"{image_name}:{tag}"
