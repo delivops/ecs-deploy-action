@@ -81,19 +81,33 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
             "host": {}
         })
 
-    # Determine image URI: prefer public_image from YAML if present
-    public_image = config.get('public_image')
+    # Determine image URI from config or arguments
     yaml_tag = config.get('tag')
-    # If public_image includes a tag already, use as-is. If not, append tag if available
-    if public_image:
-        if ':' in public_image:
-            image_uri = public_image
-        elif tag or yaml_tag:
-            image_uri = f"{public_image}:{tag or yaml_tag}"
+    image_uri = None
+
+    # Priority 1: public_image (Docker Hub or public ECR)
+    public_image_from_yaml = config.get('public_image')
+    if public_image or public_image_from_yaml:
+        public = public_image or public_image_from_yaml
+        if ':' in public:
+            image_uri = public
         else:
-            image_uri = public_image
-    else:
-        image_uri = f"{registry}/{image_name}:{tag}"
+            if tag or yaml_tag:
+                image_uri = f"{public}:{tag or yaml_tag}"
+            else:
+                image_uri = public
+
+    # Priority 2: ECR image from arguments
+    elif registry and image_name:
+        if not tag and not yaml_tag:
+            raise ValueError("When using ECR, either --tag or YAML 'tag' must be provided.")
+        image_uri = f"{registry}/{image_name}:{tag or yaml_tag}"
+    
+    # Fail if image cannot be determined
+    if not image_uri:
+        raise ValueError("No valid image source found. Please provide either a public_image or registry/image_name/tag combination.")
+
+    print(f"✅ Using container image: {image_uri}")
     
 
     # Create app container definition
