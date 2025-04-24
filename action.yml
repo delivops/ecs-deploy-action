@@ -34,10 +34,10 @@ inputs:
     description: 'Whether to perform a dry run'
     default: 'false'
     required: false 
-  registry:
+  ecr-registry:
     description: 'The ECR registry URL'
     required: false
-    default: 'ecr'
+    default: 'true'
 
 runs:
   using: "composite"
@@ -49,26 +49,22 @@ runs:
 
     - id: login_ecr
       uses: aws-actions/amazon-ecr-login@v2
+    - id: define-registry
+      run: |
+        if [ "${{ inputs.ecr-registry }}" == "true" ]; then
+          echo "::set-output name=registry::${{ steps.login_ecr.outputs.registry }}"
+        else
+          echo "::set-output name=registry::false"
+        fi
+      shell: bash
       
     - id: generate-task-def
-      if: ${{ inputs.registry }} == 'ecr'
       run: |
         python3 ${{ github.action_path }}/scripts/generate_task_def.py \
           ${{ inputs.task_config_yaml }} \
           ${{ inputs.ecs_cluster }} \
           ${{ inputs.aws_region }} \
-          ${{ steps.login_ecr.outputs.registry }} \
-          ${{ inputs.image_name }} \
-          ${{ inputs.tag }}
-      shell: bash
-
-    - id: generate-task-def
-      if: ${{ inputs.registry }} == 'docker'
-      run: |
-        python3 ${{ github.action_path }}/scripts/generate_task_def.py \
-          ${{ inputs.task_config_yaml }} \
-          ${{ inputs.ecs_cluster }} \
-          ${{ inputs.aws_region }} \
+          ${{ steps.define-registry.outputs.registry }} \
           ${{ inputs.image_name }} \
           ${{ inputs.tag }}
       shell: bash
