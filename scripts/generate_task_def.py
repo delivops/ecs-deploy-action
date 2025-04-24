@@ -5,16 +5,18 @@ import argparse
 import sys
 import os
 
-def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=None, image_name=None, tag=None):
+def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=None, image_name=None, tag=None, public_image=None):
     """
     Generate an ECS task definition from a simplified YAML configuration
     
     Args:
         yaml_file_path (str): Path to the YAML configuration file
+        cluster_name (str): The ECS cluster name
         aws_region (str): AWS region to use for log configuration
-        registry (str): ECR registry URL
-        image_name (str): Image name
-        tag (str): Image tag
+        registry (str): ECR registry URL (optional, not needed for public images)
+        image_name (str): Image name (optional, not needed for public images)
+        tag (str): Image tag (optional if public_image includes tag or YAML tag is used)
+        public_image (str): Public Docker image name (optional, takes precedence if provided)
     
     Returns:
         dict: The generated task definition
@@ -301,6 +303,7 @@ def parse_args():
     parser.add_argument('--registry', help='ECR registry URL (not needed for public_image)', default=None)
     parser.add_argument('--image_name', help='Container image name (not needed for public_image)', default=None)
     parser.add_argument('--tag', help='Container image tag (optional if public_image includes tag or YAML tag is used)', default=None)
+    parser.add_argument('--public_image', help='Public Docker image name (takes precedence if provided)', default=None)
     parser.add_argument('--output', default='task-definition.json', help='Output file path (default: task-definition.json)')
     
     return parser.parse_args()
@@ -315,7 +318,8 @@ if __name__ == "__main__":
             args.aws_region,
             args.registry,
             args.image_name,
-            args.tag
+            args.tag,
+            args.public_image
         )
         
         # Write to the specified output file
