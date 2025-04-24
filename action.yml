@@ -34,7 +34,7 @@ inputs:
     description: 'Whether to perform a dry run'
     default: 'false'
     required: false 
-  ecr-registry:
+  ecr_registry:
     description: 'The ECR registry URL'
     required: false
     default: 'true'
@@ -51,7 +51,7 @@ runs:
       uses: aws-actions/amazon-ecr-login@v2
     - id: define-registry
       run: |
-        if [ "${{ inputs.ecr-registry }}" == "true" ]; then
+        if [ "${{ inputs.ecr_registry }}" == "true" ]; then
           echo "registry=${{ steps.login_ecr.outputs.registry }}" >> $GITHUB_OUTPUT
         else
           echo "registry=" >> $GITHUB_OUTPUT
