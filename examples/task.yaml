@@ -1,3 +1,10 @@
+# Example using a public Docker image (uncomment to use)
+# public_image: phpmyadmin/phpmyadmin:22.5.5
+# Or, separate tag (script will append):
+# public_image: phpmyadmin/phpmyadmin
+# tag: 22.5.5
+
+# Example using ECR image (default)
 name: app
 replica_count: 2
 cpu: 512

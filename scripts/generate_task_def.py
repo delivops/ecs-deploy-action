@@ -5,7 +5,7 @@ import argparse
 import sys
 import os
 
-def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry, image_name, tag):
+def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=None, image_name=None, tag=None):
     """
     Generate an ECS task definition from a simplified YAML configuration
     
@@ -79,8 +79,19 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
             "host": {}
         })
 
-    # Build the full image URI
-    image_uri = f"{registry}/{image_name}:{tag}"
+    # Determine image URI: prefer public_image from YAML if present
+    public_image = config.get('public_image')
+    yaml_tag = config.get('tag')
+    # If public_image includes a tag already, use as-is. If not, append tag if available
+    if public_image:
+        if ':' in public_image:
+            image_uri = public_image
+        elif tag or yaml_tag:
+            image_uri = f"{public_image}:{tag or yaml_tag}"
+        else:
+            image_uri = public_image
+    else:
+        image_uri = f"{registry}/{image_name}:{tag}"
     
 
     # Create app container definition
@@ -287,9 +298,9 @@ def parse_args():
     parser.add_argument('yaml_file', help='Path to the YAML configuration file')
     parser.add_argument('cluster_name', help='The cluster name')
     parser.add_argument('aws_region', help='AWS region for log configuration')
-    parser.add_argument('registry', help='ECR registry URL')
-    parser.add_argument('image_name', help='Container image name')
-    parser.add_argument('tag', help='Container image tag')
+    parser.add_argument('--registry', help='ECR registry URL (not needed for public_image)', default=None)
+    parser.add_argument('--image_name', help='Container image name (not needed for public_image)', default=None)
+    parser.add_argument('--tag', help='Container image tag (optional if public_image includes tag or YAML tag is used)', default=None)
     parser.add_argument('--output', default='task-definition.json', help='Output file path (default: task-definition.json)')
     
     return parser.parse_args()
