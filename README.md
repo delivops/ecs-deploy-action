@@ -52,6 +52,59 @@ Create a YAML configuration file with the following structure:
 
 ```yaml
 name: my_app                    # Application name
+```
+
+## How to test locally?
+
+You can test this repository locally by following these steps:
+
+### 1. Clone the repository
+```bash
+git clone <your-repo-url>
+cd ecs-deploy-action
+```
+
+### 2. Create and activate a Python virtual environment
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+### 3. Install dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Run the task definition generator
+The script `scripts/generate_task_def.py` requires several arguments:
+
+```bash
+python scripts/generate_task_def.py examples/task.yaml <cluster_name> <aws_region> <registry> <image_name> <tag> > examples/output.json
+```
+For example:
+```bash
+python scripts/generate_task_def.py examples/task.yaml my-cluster us-east-1 123456789012.dkr.ecr.us-east-1.amazonaws.com my-app latest > examples/output.json
+```
+
+### 5. (Optional) Run with Docker
+You can also use Docker to run the script without installing Python locally:
+
+```bash
+docker build -t ecs-deploy-action .
+docker run --rm -v $(pwd):/app ecs-deploy-action python scripts/generate_task_def.py examples/task.yaml my-cluster us-east-1 123456789012.dkr.ecr.us-east-1.amazonaws.com my-app latest > examples/output.json
+```
+
+- `requirements.txt` lists the Python dependencies (currently: pyyaml).
+- `Dockerfile` is provided for easy containerized usage.
+
+---
+
+This repository is now ready for public use. Please open issues or submit pull requests for improvements or bug fixes.
+
+## YAML Configuration Format
+
+```yaml
+name: my_app                    # Application name
 cpu: 1024                       # CPU units
 memory: 8192                    # Memory in MB
 include_otel_collector: true    # Include OpenTelemetry collector sidecar

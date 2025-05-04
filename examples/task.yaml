@@ -5,8 +5,8 @@ memory: 1024
 cpu_arch: ARM64
 role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
 secrets: 
-  - CLIENT_ID: arn:aws:secretsmanager::secret:ava-cortex-analyst-production-IhUQht
-  - CLIENT_NAME: arn:aws:secretsmanager::secret:ava-cortex-analyst-production-IhUQht
+  - CLIENT_ID: arn:aws:secretsmanager::secret:123
+  - CLIENT_NAME: arn:aws:secretsmanager::secret:123
 secret_files: 
   - snowflake-1
   - other-secret-name
