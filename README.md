@@ -46,21 +46,13 @@ jobs:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
 ```
 
-## YAML Configuration Format
-
-Create a YAML configuration file with the following structure:
-
-```yaml
-name: my_app                    # Application name
-```
-
 ## How to test locally?
 
 You can test this repository locally by following these steps:
 
 ### 1. Clone the repository
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/delivops/ecs-deploy-action.git
 cd ecs-deploy-action
 ```
 
