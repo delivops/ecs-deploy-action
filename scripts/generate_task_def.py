@@ -57,8 +57,15 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
     # Extract fluent_bit_collector config if present
     fluent_bit_collector = config.get('fluent_bit_collector', {})
     use_fluent_bit = bool(fluent_bit_collector and fluent_bit_collector.get('image_name', '').strip())
-    # Always use ECR-style image for fluent-bit sidecar
-    fluent_bit_image = f"{registry}/{image_name}:{tag}" if use_fluent_bit else ''
+    # Use ECR-style image for fluent-bit sidecar, using fluent_bit_collector.image_name (without tag)
+    if use_fluent_bit:
+        fluent_bit_image_name = fluent_bit_collector.get('image_name', '').strip()
+        # Remove any tag from fluent_bit_image_name
+        if ':' in fluent_bit_image_name:
+            fluent_bit_image_name = fluent_bit_image_name.split(':')[0]
+        fluent_bit_image = f"{registry}/{fluent_bit_image_name}:{tag_clean}"
+    else:
+        fluent_bit_image = ''
     
     # Get environment variables (changed from env_variables to envs)
     environment = []
@@ -91,11 +98,25 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
             "host": {}
         })
 
-    # Build the full image URI
+    # Sanitize image_name and tag for ECR URI
+    def parse_image_parts(image_name, tag):
+        # Remove registry if mistakenly included in image_name
+        if '/' in image_name and '.' in image_name.split('/')[0]:
+            # Remove registry part
+            image_name = '/'.join(image_name.split('/')[1:])
+        # Remove tag from image_name if present
+        if ':' in image_name:
+            image_name, image_tag = image_name.split(':', 1)
+            if not tag:
+                tag = image_tag
+        return image_name, tag
+
+    image_name_clean, tag_clean = parse_image_parts(image_name, tag)
+
     if registry:
-        image_uri = f"{registry}/{image_name}:{tag}"
+        image_uri = f"{registry}/{image_name_clean}:{tag_clean}"
     else:
-        image_uri = f"{image_name}:{tag}"
+        image_uri = f"{image_name_clean}:{tag_clean}"
     
 
     # Create app container definition
