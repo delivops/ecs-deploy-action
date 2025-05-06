@@ -5,7 +5,7 @@ import argparse
 import sys
 import os
 
-def generate_task_definition(yaml_file_path, cluster_name, aws_region, image_name, tag, registry=''):
+def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=None, image_name=None, tag=None, public_image=None):
     """
     Generate an ECS task definition from a simplified YAML configuration
     
@@ -27,8 +27,14 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, image_nam
     app_name = config.get('name', 'app')
     cpu = str(config.get('cpu', 256))
     memory = str(config.get('memory', 512))
-    include_otel = config.get('include_otel_collector', False)
-    otel_collector_ssm_path = config.get('otel_collector_ssm_path', 'adot-config-global.yaml')
+    # OTEL Collector block (new format)
+    otel_collector = config.get('otel_collector')
+    if otel_collector is not None:
+        otel_collector_image = otel_collector.get('image_name', '').strip()
+        if not otel_collector_image:
+            otel_collector_image = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
+    else:
+        otel_collector_image = None
     cpu_arch = config.get('cpu_arch', 'X86_64')
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
@@ -47,6 +53,12 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, image_nam
     
     # Extract replica_count for later use in the GitHub Action
     replica_count = config.get('replica_count', '')
+
+    # Extract fluent_bit_collector config if present
+    fluent_bit_collector = config.get('fluent_bit_collector', {})
+    use_fluent_bit = bool(fluent_bit_collector and fluent_bit_collector.get('image_name', '').strip())
+    # Always use ECR-style image for fluent-bit sidecar
+    fluent_bit_image = f"{registry}/{image_name}:{tag}" if use_fluent_bit else ''
     
     # Get environment variables (changed from env_variables to envs)
     environment = []
@@ -94,8 +106,16 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, image_nam
         "environment": environment,
         "command": command,
         "entryPoint": entrypoint,
-        "secrets": secrets,
-        "logConfiguration": {
+        "secrets": secrets
+    }
+    # Set logConfiguration for app container
+    if use_fluent_bit:
+        app_container["logConfiguration"] = {
+            "logDriver": "awsfirelens",
+            "options": {}
+        }
+    else:
+        app_container["logConfiguration"] = {
             "logDriver": "awslogs",
             "options": {
                 "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
@@ -103,7 +123,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, image_nam
                 "awslogs-stream-prefix": "/default"
             }
         }
-    }
+    
         # Only include healthCheck if it was properly built
     if health:
         app_container["healthCheck"] = health
@@ -150,14 +170,24 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, image_nam
                 "containerPath": "/etc/secrets"
             }
         ]
-        
         # Add dependency on init containers
-        app_container["dependsOn"] = [
+        app_depends_on = [
             {
                 "containerName": "init-container-for-secret-files",
                 "condition": "SUCCESS"
             }
         ]
+    else:
+        app_depends_on = []
+
+    # If fluent-bit is enabled, add dependsOn for fluent-bit
+    if use_fluent_bit:
+        app_depends_on.append({
+            "containerName": "fluent-bit",
+            "condition": "START"
+        })
+    if app_depends_on:
+        app_container["dependsOn"] = app_depends_on
     
     print(f"Setting container image to: {image_uri}")
     
@@ -214,12 +244,40 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, image_nam
 
     # Add the main application container
     container_definitions.append(app_container)
+
+    # Add fluent-bit sidecar container if enabled
+    if use_fluent_bit:
+        fluent_bit_container = {
+            "name": "fluent-bit",
+            "image": fluent_bit_image,  # Always ECR-style
+            "essential": False,
+            "environment": [
+                {"name": "SERVICE_NAME", "value": app_name}
+            ],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
+                    "awslogs-region": aws_region,
+                    "awslogs-stream-prefix": "fluentbit"
+                }
+            },
+            "firelensConfiguration": {
+                "type": "fluentbit",
+                "options": {
+                    "config-file-type": "file",
+                    "config-file-value": "/extra.conf",
+                    "enable-ecs-log-metadata": "true"
+                }
+            }
+        }
+        container_definitions.append(fluent_bit_container)
     
-    # Add the OpenTelemetry collector container if specified
-    if include_otel:
+    # Add the OpenTelemetry collector container if enabled (new format)
+    if otel_collector_image is not None:
         otel_container = {
             "name": "otel-collector",
-            "image": "public.ecr.aws/aws-observability/aws-otel-collector:v0.43.1",
+            "image": otel_collector_image,  # Use as-is from YAML or default
             "portMappings": [
                 {
                     "name": "otel-collector-4317-tcp",
@@ -236,16 +294,12 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, image_nam
                 }
             ],
             "essential": False,
+            # Remove SSM config logic if not needed
             "command": [
                 "--config",
                 "env:SSM_CONFIG"
             ],
-            "secrets": [
-                {
-                    "name": "SSM_CONFIG",
-                    "valueFrom": otel_collector_ssm_path
-                }
-            ],
+            # Optionally remove secrets if not needed, or keep if required
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
