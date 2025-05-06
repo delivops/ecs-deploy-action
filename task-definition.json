@@ -122,7 +122,7 @@
     },
     {
       "name": "fluent-bit",
-      "image": "my-ecr-registry/my-image-name:my-tag",
+      "image": "my-ecr-registry/fluent-bit:latest",
       "essential": false,
       "environment": [
         {

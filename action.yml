@@ -64,9 +64,9 @@ runs:
           "${{ inputs.task_config_yaml }}" \
           "${{ inputs.ecs_cluster }}" \
           "${{ inputs.aws_region }}" \
+          "${{ steps.define-registry.outputs.registry }}" 
           "${{ inputs.image_name }}" \
           "${{ inputs.tag }}" \
-          "${{ steps.define-registry.outputs.registry }}" 
       shell: bash
 
     - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.3.1
