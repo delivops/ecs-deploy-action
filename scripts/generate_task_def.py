@@ -60,10 +60,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
     # Use ECR-style image for fluent-bit sidecar, using fluent_bit_collector.image_name (without tag)
     if use_fluent_bit:
         fluent_bit_image_name = fluent_bit_collector.get('image_name', '').strip()
-        # Remove any tag from fluent_bit_image_name
-        if ':' in fluent_bit_image_name:
-            fluent_bit_image_name = fluent_bit_image_name.split(':')[0]
-        fluent_bit_image = f"{registry}/{fluent_bit_image_name}:{tag_clean}"
+        fluent_bit_image = f"{registry}/{fluent_bit_image_name}"
     else:
         fluent_bit_image = ''
     
