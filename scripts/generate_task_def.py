@@ -57,6 +57,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
     # Extract fluent_bit_collector config if present
     fluent_bit_collector = config.get('fluent_bit_collector', {})
     use_fluent_bit = bool(fluent_bit_collector and fluent_bit_collector.get('image_name', '').strip())
+    config_name = fluent_bit_collector.get('extra_config', {})
+    extra_config = f"extra/{config_name}"
     # Use ECR-style image for fluent-bit sidecar, using fluent_bit_collector.image_name (without tag)
     if use_fluent_bit:
         fluent_bit_image_name = fluent_bit_collector.get('image_name', '').strip()
@@ -284,7 +286,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
                 "type": "fluentbit",
                 "options": {
                     "config-file-type": "file",
-                    "config-file-value": "/extra.conf",
+                    "config-file-value": extra_config,
                     "enable-ecs-log-metadata": "true"
                 }
             }
