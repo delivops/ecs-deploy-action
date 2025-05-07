@@ -27,5 +27,7 @@ health_check:
   start_period: 10
 fluent_bit_collector:
   image_name: "fluent-bit:latest" 
+  extra_config: "extra.conf"
+  ecs_log_metadata: "true"
 otel_collector:
   image_name: ""   
