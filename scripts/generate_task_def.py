@@ -284,7 +284,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
                 "timeout": 5,
                 "retries": 3,
                 "startPeriod": 5
-            }
+            },
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
