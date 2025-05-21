@@ -275,6 +275,16 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
             "environment": [
                 {"name": "SERVICE_NAME", "value": app_name}
             ],
+            "healthCheck": {
+                "command": [
+                    "CMD-SHELL",
+                    "curl -f http://127.0.0.1:2020/api/v1/health || exit 1"
+                ],
+                "interval": 10,
+                "timeout": 5,
+                "retries": 3,
+                "startPeriod": 5
+            }
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
