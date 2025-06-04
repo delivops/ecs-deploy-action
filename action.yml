@@ -69,7 +69,7 @@ runs:
           "${{ inputs.tag }}" 
       shell: bash
 
-    - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.3.1
+    - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.3.2
       if: ${{ inputs.dry_run }} == 'false'
       id: ecs-deploy
       with:
