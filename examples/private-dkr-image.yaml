@@ -7,27 +7,12 @@ role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
 secrets: 
   - CLIENT_ID: arn:aws:secretsmanager::secret:ava-cortex-analyst-production-IhUQht
   - CLIENT_NAME: arn:aws:secretsmanager::secret:ava-cortex-analyst-production-IhUQht
-secret_files: 
-  - snowflake-1
-  - other-secret-name
 envs:
   - NODE_ENV: production
   - API_KEY: xyz123
 port: 8080
-additional_ports:
-  - name: 8081
-  - name2: 8082
 command: ["hello"]
 entrypoint: ["world"]
-health_check:
-  command: "curl -f http://localhost/ || exit 1"
-  interval: 30
-  timeout: 5
-  retries: 3
-  start_period: 10
-fluent_bit_collector:
-  image_name: "fluent-bit:latest" 
-  extra_config: "extra.conf"
-  ecs_log_metadata: "true"
-otel_collector:
-  image_name: ""   
+
+
+//run: python3 scripts/generate_task_def.py examples/private-dkr-image.yaml my-cluster us-east-1 "dkr" dummy-image dummy-tag

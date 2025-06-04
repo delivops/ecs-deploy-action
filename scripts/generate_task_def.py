@@ -3,63 +3,9 @@ import yaml
 import json
 import argparse
 import sys
-import boto3
+import os
 
-def get_aws_account_id():
-    """
-    Fetch the AWS Account ID of the current IAM user or role.
-    
-    Returns:
-        str: The AWS account ID.
-    """
-    sts_client = boto3.client('sts')
-    response = sts_client.get_caller_identity()
-    return response['Account']
-
-def get_secret_values(secret_arn, aws_region):
-    """
-    Fetch all key-value pairs from AWS Secrets Manager based on ARN and return as a list of dictionaries.
-    
-    Args:
-        secret_arn (str): ARN of the secret in Secrets Manager.
-        aws_region (str): AWS region where the secret is stored.
-    
-    Returns:
-        list: List of dictionaries containing name-value pairs for ECS secrets.
-    """
-    # Initialize the Secrets Manager client
-    client = boto3.client('secretsmanager', region_name=aws_region)
-    
-    # Get the AWS Account ID
-    account_id = get_aws_account_id()
-    
-    try:
-        # Get the secret value using the ARN
-        response = client.get_secret_value(SecretId=secret_arn)
-        
-        # Secrets Manager returns either 'SecretString' or 'SecretBinary'
-        if 'SecretString' in response:
-            secret = response['SecretString']
-            secrets_dict = json.loads(secret)
-            
-            # Format the secrets for ECS (using ARN structure)
-            formatted_secrets = []
-            for key, value in secrets_dict.items():
-                formatted_secrets.append({
-                    "name": key,
-                    "valueFrom": f"arn:aws:secretsmanager:{aws_region}:{account_id}:secret:{secret_arn.split(':')[-1]}-{key}::{key}"
-                })
-            return formatted_secrets
-        
-        else:
-            # Handle the case where the secret is binary
-            raise ValueError("Secret is stored as binary, which is unsupported in this example")
-    
-    except Exception as e:
-        print(f"Error fetching secrets: {e}")
-        return []
-
-def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry, image_name, tag):
+def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=None, image_name=None, tag=None, public_image=None):
     """
     Generate an ECS task definition from a simplified YAML configuration
     
@@ -81,71 +27,138 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
     app_name = config.get('name', 'app')
     cpu = str(config.get('cpu', 256))
     memory = str(config.get('memory', 512))
-    include_otel = config.get('include_otel_collector', False)
-    otel_collector_ssm_path = config.get('otel_collector_ssm_path', 'adot-config-global.yaml')
+    # OTEL Collector block (new format)
+    otel_collector = config.get('otel_collector')
+    if otel_collector is not None:
+        otel_collector_image = otel_collector.get('image_name', '').strip()
+        if not otel_collector_image:
+            otel_collector_image = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
+    else:
+        otel_collector_image = None
     cpu_arch = config.get('cpu_arch', 'X86_64')
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
+    health_check = config.get('health_check', {})
+    # Only build health check if config has values and command is non-empty
+    if health_check and health_check.get('command'):
+        health = {
+            "command": ["CMD-SHELL", health_check["command"]],
+            "interval": health_check.get('interval', 30),
+            "timeout": health_check.get('timeout', 5),
+            "retries": health_check.get('retries', 3),
+            "startPeriod": health_check.get('start_period', 10)
+        }
+    else:
+        health = None
     
+    # Extract replica_count for later use in the GitHub Action
+    replica_count = config.get('replica_count', '')
 
-    # Get environment variables
+    # Extract fluent_bit_collector config if present
+    fluent_bit_collector = config.get('fluent_bit_collector', {})
+    use_fluent_bit = bool(fluent_bit_collector and fluent_bit_collector.get('image_name', '').strip())
+    config_name = fluent_bit_collector.get('extra_config', "extra.conf")
+    ecs_log_metadata = fluent_bit_collector.get('ecs_log_metadata', 'true')
+    extra_config = f"extra/{config_name}"
+    # Use ECR-style image for fluent-bit sidecar, using fluent_bit_collector.image_name (without tag)
+    if use_fluent_bit:
+        fluent_bit_image_name = fluent_bit_collector.get('image_name', '').strip()
+        fluent_bit_image = f"{registry}/{fluent_bit_image_name}"
+    else:
+        fluent_bit_image = ''
+    
+    # Get environment variables (changed from env_variables to envs)
     environment = []
-    for env_var in config.get('env_variables', []):
+    for env_var in config.get('envs', []):
         for key, value in env_var.items():
             environment.append({
                 "name": key,
                 "value": value
             })
     
-    # Get secrets using the ARN from config
+    # Get secrets directly from YAML without AWS access
     secrets = []
-    secret_arn = config.get('secret_arn', '')
-    if secret_arn:
-        secrets.extend(get_secret_values(secret_arn, aws_region))
+    secret_list = config.get('secrets', [])
+    for secret_dict in secret_list:
+        for key, base_arn in secret_dict.items():
+            secrets.append({
+                "name": key,
+                "valueFrom": f"{base_arn}:{key}::"
+            })
     
-    # Check for SSM file configuration
-    env_file_arn = config.get('env_file_arn', '')
-    has_env_file = bool(env_file_arn)
+    # Check for secret_files configuration (multiple files now supported)
+    secret_files = config.get('secret_files', [])
+    has_secret_files = len(secret_files) > 0
     
-    # Create shared volume for SSM files if needed
+    # Create shared volume for secret files if needed
     volumes = []
-    if has_env_file:
+    if has_secret_files:
         volumes.append({
             "name": "shared-volume",
             "host": {}
         })
 
-    # Build the full image URI
-    image_uri = f"{registry}/{image_name}:{tag}"
+    # Sanitize image_name and tag for ECR URI
+    def parse_image_parts(image_name, tag):
+        # Remove registry if mistakenly included in image_name
+        if '/' in image_name and '.' in image_name.split('/')[0]:
+            # Remove registry part
+            image_name = '/'.join(image_name.split('/')[1:])
+        # Remove tag from image_name if present
+        if ':' in image_name:
+            image_name, image_tag = image_name.split(':', 1)
+            if not tag:
+                tag = image_tag
+        return image_name, tag
+
+    image_name_clean, tag_clean = parse_image_parts(image_name, tag)
+
+    if registry:
+        image_uri = f"{registry}/{image_name_clean}:{tag_clean}"
+    else:
+        image_uri = f"{image_name_clean}:{tag_clean}"
     
+
     # Create app container definition
     app_container = {
         "name": "app",
         "image": image_uri,
         "essential": True,
         "environment": environment,
-        "secrets": secrets,
-        "volumes": volumes,
-        "logConfiguration": {
+        "command": command,
+        "entryPoint": entrypoint,
+        "secrets": secrets
+    }
+    # Set logConfiguration for app container
+    if use_fluent_bit:
+        app_container["logConfiguration"] = {
+            "logDriver": "awsfirelens",
+            "options": {}
+        }
+    else:
+        app_container["logConfiguration"] = {
             "logDriver": "awslogs",
             "options": {
                 "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
                 "awslogs-region": aws_region,
-                "awslogs-stream-prefix": "/"
+                "awslogs-stream-prefix": "/default"
             }
         }
-    }
+    
+        # Only include healthCheck if it was properly built
+    if health:
+        app_container["healthCheck"] = health
 
-    # Handle port configurations
+    # Handle port configurations with new naming
     main_port = config.get('port')
     additional_ports = config.get('additional_ports', [])
     
     port_mappings = []
     
-    # Add main port if specified
+    # Add main port if specified with default name
     if main_port:
         port_mapping = {
-            "name": f"{cluster_name}_{app_name}",
+            "name": "default",
             "containerPort": main_port,
             "hostPort": main_port,
             "protocol": "tcp",
@@ -153,58 +166,85 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
         }
         port_mappings.append(port_mapping)
     
-    # Add additional ports if specified
-    for i, port in enumerate(additional_ports):
-        # Start index from 2 for additional ports
-        index = i + 2
-        port_mapping = {
-            "name": f"{cluster_name}_{app_name}_{index}",
-            "containerPort": port,
-            "hostPort": port,
-            "protocol": "tcp",
-            "appProtocol": "http"
-        }
-        port_mappings.append(port_mapping)
+    # Add additional ports with their specified names
+    for port_info in additional_ports:
+        if isinstance(port_info, dict):
+            # Each item is expected to be a dict with one key-value pair
+            for name, port in port_info.items():
+                port_mapping = {
+                    "name": name,
+                    "containerPort": port,
+                    "hostPort": port,
+                    "protocol": "tcp",
+                    "appProtocol": "http"
+                }
+                port_mappings.append(port_mapping)
     
     if port_mappings:
         app_container["portMappings"] = port_mappings
     
     # Add mount points if using shared volume
-    if has_env_file:
+    if has_secret_files:
         app_container["mountPoints"] = [
             {
                 "sourceVolume": "shared-volume",
                 "containerPath": "/etc/secrets"
             }
         ]
-        
         # Add dependency on init containers
-        app_container["dependsOn"] = [
+        app_depends_on = [
             {
-                "containerName": "init-container-for-env-file",
+                "containerName": "init-container-for-secret-files",
                 "condition": "SUCCESS"
             }
         ]
+    else:
+        app_depends_on = []
+
+    # If fluent-bit is enabled, add dependsOn for fluent-bit
+    if use_fluent_bit:
+        app_depends_on.append({
+            "containerName": "fluent-bit",
+            "condition": "START"
+        })
+    if app_depends_on:
+        app_container["dependsOn"] = app_depends_on
     
     print(f"Setting container image to: {image_uri}")
     
-     # Create the container definitions list
+    # Create the container definitions list
     container_definitions = []
     
-    # Create init container for env file if needed
-    if has_env_file:
-        # Extract the secret name from the ARN
-        secret_name = env_file_arn.split(':')[-1].split('/')[-1] if env_file_arn else f"{cluster_name}_{app_name}_secret"
-        file_name = f"{cluster_name}_{app_name}_secret"
+    # Create init container for secret files if needed
+    if has_secret_files:
+        # Join secret names with commas for the environment variable
+        secret_files_env = ",".join(secret_files)
         
         init_container = {
-            "name": "init-container-for-env-file",
+            "name": "init-container-for-secret-files",
             "image": "amazon/aws-cli",
             "essential": False,
             "entryPoint": ["/bin/sh"],
             "command": [
                 "-c",
-                f"aws secretsmanager get-secret-value --secret-id {secret_name} --region {aws_region} --query SecretString --output text > /etc/secrets/{file_name}"
+                "for secret in ${SECRET_FILES//,/ }; do "
+                "echo \"Fetching $secret...\"; "
+                "aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretString --output text > /etc/secrets/$secret; "
+                "if [ $? -eq 0 ] && [ -s /etc/secrets/$secret ]; then "
+                "echo \"✅ Successfully saved $secret to /etc/secrets/$secret\"; "
+                "else echo \"❌ Failed to save $secret\" >&2; exit 1; "
+                "fi; "
+                "done"
+            ],
+            "environment": [
+                {
+                    "name": "SECRET_FILES",
+                    "value": secret_files_env
+                },
+                {
+                    "name": "AWS_REGION",
+                    "value": aws_region
+                }
             ],
             "mountPoints": [
                 {
@@ -216,19 +256,59 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
                 "logDriver": "awslogs",
                 "options": {
                     "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
-                    "awslogs-region": aws_region
-                }
+                    "awslogs-region": aws_region,
+                    "awslogs-stream-prefix": "ssm-file-downloader"                
+                    }
             }
         }
         container_definitions.append(init_container)
-    
+
     # Add the main application container
     container_definitions.append(app_container)
-    # Add the OpenTelemetry collector container if specified
-    if include_otel:
+
+    # Add fluent-bit sidecar container if enabled
+    if use_fluent_bit:
+        fluent_bit_container = {
+            "name": "fluent-bit",
+            "image": fluent_bit_image,  # Always ECR-style
+            "essential": False,
+            "environment": [
+                {"name": "SERVICE_NAME", "value": app_name}
+            ],
+            "healthCheck": {
+                "command": [
+                    "CMD-SHELL",
+                    "curl -f http://127.0.0.1:2020/api/v1/health || exit 1"
+                ],
+                "interval": 10,
+                "timeout": 5,
+                "retries": 3,
+                "startPeriod": 5
+            },
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
+                    "awslogs-region": aws_region,
+                    "awslogs-stream-prefix": "fluentbit"
+                }
+            },
+            "firelensConfiguration": {
+                "type": "fluentbit",
+                "options": {
+                    "config-file-type": "file",
+                    "config-file-value": extra_config,
+                    "enable-ecs-log-metadata": ecs_log_metadata
+                }
+            }
+        }
+        container_definitions.append(fluent_bit_container)
+    
+    # Add the OpenTelemetry collector container if enabled (new format)
+    if otel_collector_image is not None:
         otel_container = {
             "name": "otel-collector",
-            "image": "public.ecr.aws/aws-observability/aws-otel-collector:v0.43.1",
+            "image": otel_collector_image,  # Use as-is from YAML or default
             "portMappings": [
                 {
                     "name": "otel-collector-4317-tcp",
@@ -245,16 +325,12 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
                 }
             ],
             "essential": False,
+            # Remove SSM config logic if not needed
             "command": [
                 "--config",
                 "env:SSM_CONFIG"
             ],
-            "secrets": [
-                {
-                    "name": "SSM_CONFIG",
-                    "valueFrom": otel_collector_ssm_path
-                }
-            ],
+            # Optionally remove secrets if not needed, or keep if required
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
@@ -276,8 +352,6 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
             "operatingSystemFamily": "LINUX"
         },
         "family": f"{cluster_name}_{app_name}",
-        "command": command,
-        "entryPoint": entrypoint,
         "taskRoleArn": config.get('role_arn', ''),
         "executionRoleArn": config.get('role_arn', ''),
         "networkMode": "awsvpc",
@@ -286,6 +360,13 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry,
         ]
     }
     
+    # Add volumes if needed
+    if has_secret_files and volumes:
+        task_definition["volumes"] = volumes
+    
+    # Output the replica count to output
+    print(f"::set-output name=replica_count::{replica_count}")
+
     return task_definition
 
 def parse_args():
@@ -318,6 +399,10 @@ if __name__ == "__main__":
         # Write to the specified output file
         with open(args.output, 'w') as file:
             json.dump(task_definition, file, indent=2)
+
+        print("\n----- Task Definition -----")
+        print(json.dumps(task_definition, indent=2))
+        print("---------------------------\n")
             
         print(f"Task definition successfully written to {args.output}")
         
