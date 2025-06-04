@@ -330,6 +330,12 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
                 "--config",
                 "env:SSM_CONFIG"
             ],
+            "secrets": [
+                {
+                    "name": "SSM_CONFIG",
+                    "valueFrom": "adot-config-global.yaml"
+                }
+            ],
             # Optionally remove secrets if not needed, or keep if required
             "logConfiguration": {
                 "logDriver": "awslogs",
