@@ -38,8 +38,11 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
         if not otel_collector_image_name:
             otel_collector_image = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
         else:
-            # Custom image name - use ECR registry (private image)
-            otel_collector_image = f"{registry}/{otel_collector_image_name}"
+            # Custom image name - use ECR registry (private image) if registry is available
+            if registry:
+                otel_collector_image = f"{registry}/{otel_collector_image_name}"
+            else:
+                otel_collector_image = otel_collector_image_name
     else:
         otel_collector_image = None
         otel_is_custom_image = False
@@ -71,7 +74,10 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
     # Use ECR-style image for fluent-bit sidecar, using fluent_bit_collector.image_name (without tag)
     if use_fluent_bit:
         fluent_bit_image_name = fluent_bit_collector.get('image_name', '').strip()
-        fluent_bit_image = f"{registry}/{fluent_bit_image_name}"
+        if registry:
+            fluent_bit_image = f"{registry}/{fluent_bit_image_name}"
+        else:
+            fluent_bit_image = fluent_bit_image_name
     else:
         fluent_bit_image = ''
     

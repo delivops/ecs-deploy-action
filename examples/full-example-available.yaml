@@ -103,8 +103,8 @@ fluent_bit_collector:
 # OpenTelemetry collector configuration
 otel_collector:
   # OTel collector image - if empty, uses default AWS OTel collector
-  # If custom image is provided, it will use file-based config instead of SSM
-  image_name: "my-custom-otel-collector:v1.0.0"
+  # If custom image is provided, it will be treated as private ECR image
+  image_name: "my-custom-otel-collector:v1.0.0"  # Will become: {registry}/my-custom-otel-collector:v1.0.0
   
   # For custom images: configuration file name (located in /conf/ directory in container)
   extra_config: "otel-config.yaml"
@@ -121,15 +121,15 @@ otel_collector:
 # otel_collector:
 #   ssm_name: "production-otel-config.yaml"
 
-# Scenario 2: Custom OTEL image with file config
+# Scenario 2: Custom OTEL image from ECR with file config
 # otel_collector:
-#   image_name: "my-company/otel-collector:v2.0.0"
+#   image_name: "my-company/otel-collector:v2.0.0"  # ECR: {registry}/my-company/otel-collector:v2.0.0
 #   extra_config: "custom-config.yaml"
 #   metrics_port: 9090
 
-# Scenario 3: Custom OTEL image with default config file
+# Scenario 3: Custom OTEL image from ECR with default config file
 # otel_collector:
-#   image_name: "my-company/otel-collector:latest"
+#   image_name: "my-company/otel-collector:latest"   # ECR: {registry}/my-company/otel-collector:latest
 #   metrics_port: 8080
 
 # =============================================================================
