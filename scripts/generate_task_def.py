@@ -32,10 +32,14 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
     if otel_collector is not None:
         otel_collector_image = otel_collector.get('image_name', '').strip()
         otel_collector_ssm = otel_collector.get('ssm_name', 'adot-config-global.yaml').strip()
+        otel_extra_config = otel_collector.get('extra_config', '').strip()
+        otel_metrics_port = otel_collector.get('metrics_port')
+        otel_is_custom_image = bool(otel_collector_image)
         if not otel_collector_image:
             otel_collector_image = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
     else:
         otel_collector_image = None
+        otel_is_custom_image = False
     cpu_arch = config.get('cpu_arch', 'X86_64')
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
@@ -307,6 +311,43 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
     
     # Add the OpenTelemetry collector container if enabled (new format)
     if otel_collector_image is not None:
+        # Build environment variables for OTEL container
+        otel_environment = []
+        
+        # Add CUSTOM_PORT if metrics_port is specified
+        if otel_metrics_port is not None:
+            otel_environment.append({
+                "name": "CUSTOM_PORT",
+                "value": str(otel_metrics_port)
+            })
+        
+        # Add SERVICE_NAME if using custom image (not default AWS image)
+        if otel_is_custom_image:
+            otel_environment.append({
+                "name": "SERVICE_NAME",
+                "value": app_name
+            })
+        
+        # Build command based on image type
+        if otel_is_custom_image and otel_extra_config:
+            # Custom image with extra config file
+            otel_command = [
+                "--config",
+                f"/conf/{otel_extra_config}"
+            ]
+        elif otel_is_custom_image:
+            # Custom image without extra config (use default config path)
+            otel_command = [
+                "--config",
+                "/conf/config.yaml"
+            ]
+        else:
+            # Default AWS image - use SSM config
+            otel_command = [
+                "--config",
+                "env:SSM_CONFIG"
+            ]
+        
         otel_container = {
             "name": "otel-collector",
             "image": otel_collector_image,  # Use as-is from YAML or default
@@ -326,18 +367,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
                 }
             ],
             "essential": False,
-            # Remove SSM config logic if not needed
-            "command": [
-                "--config",
-                "env:SSM_CONFIG"
-            ],
-            "secrets": [
-                {
-                    "name": "SSM_CONFIG",
-                    "valueFrom": otel_collector_ssm
-                }
-            ],
-            # Optionally remove secrets if not needed, or keep if required
+            "command": otel_command,
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
@@ -347,6 +377,20 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
                 }
             }
         }
+        
+        # Add environment variables if any
+        if otel_environment:
+            otel_container["environment"] = otel_environment
+        
+        # Add secrets only for default AWS image
+        if not otel_is_custom_image:
+            otel_container["secrets"] = [
+                {
+                    "name": "SSM_CONFIG",
+                    "valueFrom": otel_collector_ssm
+                }
+            ]
+        
         container_definitions.append(otel_container)
     
     # Create the complete task definition

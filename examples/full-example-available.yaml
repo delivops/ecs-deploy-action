@@ -1,0 +1,203 @@
+# Full Example - ECS Deploy Action Configuration
+# This file demonstrates all available configuration options for the ECS Deploy Action
+
+# =============================================================================
+# BASIC CONFIGURATION
+# =============================================================================
+
+# Application name - used in naming conventions for logs and task definitions
+name: my-app
+
+# Number of desired instances/replicas of this service
+replica_count: 3
+
+# CPU allocation (in CPU units: 256, 512, 1024, 2048, 4096)
+cpu: 1024
+
+# Memory allocation (in MB: 512, 1024, 2048, 3072, 4096, 5120, 6144, 7168, 8192)
+memory: 2048
+
+# CPU architecture (X86_64 or ARM64)
+cpu_arch: X86_64
+
+# IAM role ARN for both task execution and task role
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+
+# =============================================================================
+# CONTAINER CONFIGURATION
+# =============================================================================
+
+# Main port for the application
+port: 8080
+
+# Additional ports with custom names
+additional_ports:
+  - metrics: 9090
+  - health: 8081
+  - admin: 8082
+
+# Container command override
+command: ["npm", "start"]
+
+# Container entrypoint override
+entrypoint: ["/usr/local/bin/docker-entrypoint.sh"]
+
+# Health check configuration
+health_check:
+  command: "curl -f http://localhost:8080/health || exit 1"
+  interval: 30          # seconds between health checks
+  timeout: 5            # seconds to wait for health check
+  retries: 3            # number of consecutive failures before unhealthy
+  start_period: 60      # seconds to wait before first health check
+
+# =============================================================================
+# ENVIRONMENT VARIABLES
+# =============================================================================
+
+# Environment variables passed to the container
+envs:
+  - NODE_ENV: production
+  - API_VERSION: v1
+  - LOG_LEVEL: info
+  - DATABASE_URL: postgresql://localhost:5432/myapp
+  - REDIS_URL: redis://localhost:6379
+  - MAX_CONNECTIONS: "100"
+  - ENABLE_METRICS: "true"
+
+# =============================================================================
+# SECRETS MANAGEMENT
+# =============================================================================
+
+# Secrets from AWS Secrets Manager (injected as environment variables)
+secrets:
+  - DATABASE_PASSWORD: arn:aws:secretsmanager:us-east-1:123456789012:secret:prod-db-password
+  - API_KEY: arn:aws:secretsmanager:us-east-1:123456789012:secret:external-api-key
+  - JWT_SECRET: arn:aws:secretsmanager:us-east-1:123456789012:secret:jwt-signing-key
+
+# Secret files (downloaded to /etc/secrets/ during container startup)
+secret_files:
+  - ssl-certificate
+  - private-key
+  - config-file
+  - service-account-key
+
+# =============================================================================
+# LOGGING CONFIGURATION - FLUENT BIT
+# =============================================================================
+
+# Fluent Bit log collector configuration
+fluent_bit_collector:
+  # Fluent Bit image name (will be pulled from ECR)
+  image_name: "fluent-bit:2.1.0"
+  
+  # Extra configuration file name (located in extra/ directory)
+  extra_config: "custom-fluent-bit.conf"
+  
+  # Enable ECS log metadata in Fluent Bit
+  ecs_log_metadata: "true"
+
+# =============================================================================
+# OBSERVABILITY - OPENTELEMETRY
+# =============================================================================
+
+# OpenTelemetry collector configuration
+otel_collector:
+  # OTel collector image - if empty, uses default AWS OTel collector
+  # If custom image is provided, it will use file-based config instead of SSM
+  image_name: "my-custom-otel-collector:v1.0.0"
+  
+  # For custom images: configuration file name (located in /conf/ directory in container)
+  extra_config: "otel-config.yaml"
+  
+  # For default AWS image: SSM parameter name containing the configuration
+  ssm_name: "my-app-otel-config.yaml"
+  
+  # Optional: Custom metrics port (will be available as CUSTOM_PORT env var)
+  metrics_port: 8888
+
+# Example configurations for different scenarios:
+
+# Scenario 1: Default AWS OTEL Collector (uses SSM config)
+# otel_collector:
+#   ssm_name: "production-otel-config.yaml"
+
+# Scenario 2: Custom OTEL image with file config
+# otel_collector:
+#   image_name: "my-company/otel-collector:v2.0.0"
+#   extra_config: "custom-config.yaml"
+#   metrics_port: 9090
+
+# Scenario 3: Custom OTEL image with default config file
+# otel_collector:
+#   image_name: "my-company/otel-collector:latest"
+#   metrics_port: 8080
+
+# =============================================================================
+# GITHUB ACTION WORKFLOW EXAMPLE
+# =============================================================================
+
+# Example workflow usage:
+# 
+# name: Deploy to ECS
+# on:
+#   push:
+#     branches: [main]
+# 
+# jobs:
+#   deploy:
+#     runs-on: ubuntu-latest
+#     permissions:
+#       id-token: write
+#       contents: read
+#     steps:
+#       - uses: actions/checkout@v4
+#       
+#       - name: Deploy to ECS
+#         uses: delivops/ecs-deploy-action@main
+#         with:
+#           environment: production
+#           ecs_service: my-awesome-app
+#           image_name: my-awesome-app
+#           tag: ${{ github.sha }}
+#           task_config_yaml: .aws/production.yaml
+#           ecs_cluster: ${{ vars.ECS_CLUSTER }}
+#           aws_region: ${{ vars.AWS_REGION }}
+#           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+#           aws_role: github_services        # optional, defaults to 'github_services'
+#           dry_run: false                   # optional, defaults to false
+#           ecr_registry: true               # optional, defaults to true
+
+# =============================================================================
+# NOTES
+# =============================================================================
+
+# Container Architecture Support:
+# - X86_64: Intel/AMD 64-bit processors
+# - ARM64: ARM-based processors (AWS Graviton)
+
+# CPU and Memory Combinations (Fargate):
+# CPU: 256  -> Memory: 512, 1024, 2048
+# CPU: 512  -> Memory: 1024, 2048, 3072, 4096  
+# CPU: 1024 -> Memory: 2048, 3072, 4096, 5120, 6144, 7168, 8192
+# CPU: 2048 -> Memory: 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288, 13312, 14336, 15360, 16384
+# CPU: 4096 -> Memory: 8192, 9216, 10240, 11264, 12288, 13312, 14336, 15360, 16384, 17408, 18432, 19456, 20480, 21504, 22528, 23552, 24576, 25600, 26624, 27648, 28672, 29696, 30720
+
+# Secret Management:
+# - secrets: Environment variables from AWS Secrets Manager
+# - secret_files: Files downloaded to /etc/secrets/ during init container execution
+
+# Logging Options:
+# - Without fluent_bit_collector: Uses AWS CloudWatch Logs directly
+# - With fluent_bit_collector: Uses Fluent Bit for advanced log routing and processing
+
+# OpenTelemetry:
+# - Default AWS image: Uses SSM Parameter Store for configuration (env:SSM_CONFIG)
+# - Custom image: Uses file-based configuration (/conf/{extra_config} or /conf/config.yaml)
+# - Environment variables added for custom images:
+#   * SERVICE_NAME: Set to the application name
+#   * CUSTOM_PORT: Set to metrics_port value (if specified)
+# - Always exposes ports 4317 (gRPC) and 4318 (HTTP) for OTLP
+
+# Port Configuration:
+# - port: Main application port
+# - additional_ports: Additional ports with custom names for service discovery
