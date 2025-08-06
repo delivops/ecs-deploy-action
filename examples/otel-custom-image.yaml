@@ -19,12 +19,12 @@ port: 8080
 
 # OpenTelemetry collector using custom image
 otel_collector:
-  image_name: "amazon/config"     # Custom OTEL collector image
+  image_name: "amazon/config"     # Custom OTEL collector image (private ECR)
   extra_config: "config.yaml"    # Config file located at /conf/config.yaml in container
   metrics_port: 5000             # Custom metrics port (becomes CUSTOM_PORT env var)
 
 # How this works:
-# 1. Uses custom image: "amazon/config"
+# 1. Uses custom image from ECR: "{registry}/amazon/config" (private image)
 # 2. Configuration is loaded from file: /conf/config.yaml inside the container
 # 3. Command used: --config /conf/config.yaml
 # 4. Environment variables added to OTEL container:
@@ -33,6 +33,6 @@ otel_collector:
 # 5. No SSM configuration is used (file-based config instead)
 
 # Prerequisites:
-# - The custom image "amazon/config" should have the config file at /conf/config.yaml
-# - The image should be accessible from your ECS environment
-# - No AWS Systems Manager Parameter Store setup needed
+# - The custom image "amazon/config" should exist in your ECR registry
+# - The image should have the config file at /conf/config.yaml
+# - ECR authentication is handled automatically by the action

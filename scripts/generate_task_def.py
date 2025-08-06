@@ -30,13 +30,16 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
     # OTEL Collector block (new format)
     otel_collector = config.get('otel_collector')
     if otel_collector is not None:
-        otel_collector_image = otel_collector.get('image_name', '').strip()
+        otel_collector_image_name = otel_collector.get('image_name', '').strip()
         otel_collector_ssm = otel_collector.get('ssm_name', 'adot-config-global.yaml').strip()
         otel_extra_config = otel_collector.get('extra_config', '').strip()
         otel_metrics_port = otel_collector.get('metrics_port')
-        otel_is_custom_image = bool(otel_collector_image)
-        if not otel_collector_image:
+        otel_is_custom_image = bool(otel_collector_image_name)
+        if not otel_collector_image_name:
             otel_collector_image = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
+        else:
+            # Custom image name - use ECR registry (private image)
+            otel_collector_image = f"{registry}/{otel_collector_image_name}"
     else:
         otel_collector_image = None
         otel_is_custom_image = False
