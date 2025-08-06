@@ -31,6 +31,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
     otel_collector = config.get('otel_collector')
     if otel_collector is not None:
         otel_collector_image = otel_collector.get('image_name', '').strip()
+        otel_collector_ssm = otel_collector.get('ssm_name', 'adot-config-global.yaml').strip()
         if not otel_collector_image:
             otel_collector_image = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
     else:
@@ -334,7 +335,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
             "secrets": [
                 {
                     "name": "SSM_CONFIG",
-                    "valueFrom": "adot-config-global.yaml"
+                    "valueFrom": otel_collector_ssm
                 }
             ],
             # Optionally remove secrets if not needed, or keep if required
