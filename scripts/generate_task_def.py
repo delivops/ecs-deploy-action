@@ -5,14 +5,15 @@ import argparse
 import sys
 import os
 
-def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=None, image_name=None, tag=None, public_image=None):
+def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=None, container_registry=None, image_name=None, tag=None, public_image=None):
     """
     Generate an ECS task definition from a simplified YAML configuration
     
     Args:
         yaml_file_path (str): Path to the YAML configuration file
         aws_region (str): AWS region to use for log configuration
-        registry (str): ECR registry URL
+        registry (str): ECR registry URL for sidecars (OTEL/Fluent Bit)
+        container_registry (str): ECR registry URL for main container
         image_name (str): Image name
         tag (str): Image tag
     
@@ -40,15 +41,9 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
         else:
             # Custom image name - ALWAYS use ECR registry (private image)
             print(f"Debug: registry='{registry}', otel_collector_image_name='{otel_collector_image_name}'")
-            if registry and registry.strip():
-                # ECR registry available - use it
-                otel_collector_image = f"{registry}/{otel_collector_image_name}"
-                print(f"Debug: Using ECR registry - otel_collector_image='{otel_collector_image}'")
-            else:
-                # No ECR registry but custom image specified - this shouldn't happen normally
-                # but fallback to image name only
-                otel_collector_image = otel_collector_image_name
-                print(f"Debug: No ECR registry but custom image - otel_collector_image='{otel_collector_image}'")
+            # Registry is always available for OTEL/Fluent Bit
+            otel_collector_image = f"{registry}/{otel_collector_image_name}"
+            print(f"Debug: Using ECR registry - otel_collector_image='{otel_collector_image}'")
     else:
         otel_collector_image = None
         otel_is_custom_image = False
@@ -80,12 +75,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
     # Handle fluent-bit image - ALWAYS ECR if image_name is specified
     if use_fluent_bit:
         fluent_bit_image_name = fluent_bit_collector.get('image_name', '').strip()
-        if registry and registry.strip():
-            # ECR registry available - use it (fluent bit custom images are always ECR)
-            fluent_bit_image = f"{registry}/{fluent_bit_image_name}"
-        else:
-            # No ECR registry but custom image specified - fallback to image name only
-            fluent_bit_image = fluent_bit_image_name
+        # Registry is always available for OTEL/Fluent Bit
+        fluent_bit_image = f"{registry}/{fluent_bit_image_name}"
     else:
         fluent_bit_image = ''
     
@@ -135,8 +126,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
 
     image_name_clean, tag_clean = parse_image_parts(image_name, tag)
 
-    if registry and registry.strip():
-        image_uri = f"{registry}/{image_name_clean}:{tag_clean}"
+    if container_registry and container_registry.strip():
+        image_uri = f"{container_registry}/{image_name_clean}:{tag_clean}"
     else:
         image_uri = f"{image_name_clean}:{tag_clean}"
     
@@ -444,7 +435,8 @@ def parse_args():
     parser.add_argument('yaml_file', help='Path to the YAML configuration file')
     parser.add_argument('cluster_name', help='The cluster name')
     parser.add_argument('aws_region', help='AWS region for log configuration')
-    parser.add_argument('registry', help='ECR registry URL')
+    parser.add_argument('registry', help='ECR registry URL for sidecars (OTEL/Fluent Bit)')
+    parser.add_argument('container_registry', help='ECR registry URL for main container')
     parser.add_argument('image_name', help='Container image name')
     parser.add_argument('tag', help='Container image tag')
     parser.add_argument('--output', default='task-definition.json', help='Output file path (default: task-definition.json)')
@@ -460,6 +452,7 @@ if __name__ == "__main__":
             args.cluster_name,
             args.aws_region,
             args.registry,
+            args.container_registry,
             args.image_name,
             args.tag
         )
