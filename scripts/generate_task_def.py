@@ -38,11 +38,17 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
         if not otel_collector_image_name:
             otel_collector_image = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
         else:
-            # Custom image name - use ECR registry (private image) if registry is available
-            if registry:
+            # Custom image name - ALWAYS use ECR registry (private image)
+            print(f"Debug: registry='{registry}', otel_collector_image_name='{otel_collector_image_name}'")
+            if registry and registry.strip():
+                # ECR registry available - use it
                 otel_collector_image = f"{registry}/{otel_collector_image_name}"
+                print(f"Debug: Using ECR registry - otel_collector_image='{otel_collector_image}'")
             else:
+                # No ECR registry but custom image specified - this shouldn't happen normally
+                # but fallback to image name only
                 otel_collector_image = otel_collector_image_name
+                print(f"Debug: No ECR registry but custom image - otel_collector_image='{otel_collector_image}'")
     else:
         otel_collector_image = None
         otel_is_custom_image = False
@@ -71,12 +77,14 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
     config_name = fluent_bit_collector.get('extra_config', "extra.conf")
     ecs_log_metadata = fluent_bit_collector.get('ecs_log_metadata', 'true')
     extra_config = f"extra/{config_name}"
-    # Use ECR-style image for fluent-bit sidecar, using fluent_bit_collector.image_name (without tag)
+    # Handle fluent-bit image - ALWAYS ECR if image_name is specified
     if use_fluent_bit:
         fluent_bit_image_name = fluent_bit_collector.get('image_name', '').strip()
-        if registry:
+        if registry and registry.strip():
+            # ECR registry available - use it (fluent bit custom images are always ECR)
             fluent_bit_image = f"{registry}/{fluent_bit_image_name}"
         else:
+            # No ECR registry but custom image specified - fallback to image name only
             fluent_bit_image = fluent_bit_image_name
     else:
         fluent_bit_image = ''
@@ -127,7 +135,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
 
     image_name_clean, tag_clean = parse_image_parts(image_name, tag)
 
-    if registry:
+    if registry and registry.strip():
         image_uri = f"{registry}/{image_name_clean}:{tag_clean}"
     else:
         image_uri = f"{image_name_clean}:{tag_clean}"
