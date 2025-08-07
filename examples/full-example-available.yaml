@@ -1,20 +1,8 @@
-# F# =============================================================================
-# BASIC CONFIGURATION
-# =============================================================================
-
-# Note: Application name now comes from the ECS service name in the action
-# No need to specify 'name' field in YAML anymore
-
-# Number of desired instances/replicas of this service
-replica_count: 3le - ECS Deploy Action Configuration
-# This file demonstrates all available configuration options for the ECS Deploy Action
 
 # =============================================================================
 # BASIC CONFIGURATION
 # =============================================================================
 
-# Note: Application name now comes from the ECS service name in the action
-# No need to specify 'name' field in YAML anymore
 
 # Number of desired instances/replicas of this service
 replica_count: 3
@@ -63,7 +51,7 @@ health_check:
 # =============================================================================
 
 # Environment variables passed to the container
-# Values are automatically converted to strings for ECS compatibility
+
 envs:
   - NODE_ENV: production
   - API_VERSION: v1
@@ -83,10 +71,14 @@ envs:
 # Two ways to define secrets (choose one):
 
 # Method 1: Classic format (still supported)
+=======
+# Secrets from AWS Secrets Manager (injected as environment variables)
+
 secrets:
   - DATABASE_PASSWORD: arn:aws:secretsmanager:us-east-1:123456789012:secret:prod-db-password
   - API_KEY: arn:aws:secretsmanager:us-east-1:123456789012:secret:external-api-key
   - JWT_SECRET: arn:aws:secretsmanager:us-east-1:123456789012:secret:jwt-signing-key
+
 
 # Method 2: New grouped format (alternative to above - don't use both!)
 # secrets_envs:
@@ -99,6 +91,8 @@ secrets:
 #     values:
 #       - STRIPE_API_KEY
 #       - SENDGRID_API_KEY
+
+=======
 
 # Secret files (downloaded to /etc/secrets/ during container startup)
 secret_files:
@@ -113,7 +107,9 @@ secret_files:
 
 # Fluent Bit log collector configuration
 fluent_bit_collector:
+
   # Fluent Bit image name (ECR if ecr_registry=true, public if ecr_registry=false)
+
   image_name: "fluent-bit:2.1.0"
   
   # Extra configuration file name (located in extra/ directory)
@@ -129,6 +125,7 @@ fluent_bit_collector:
 # OpenTelemetry collector configuration
 otel_collector:
   # OTel collector image - if empty, uses default AWS OTel collector
+
   # If custom image is provided, respects ecr_registry setting
   image_name: "my-custom-otel-collector:v1.0.0"
   
@@ -166,6 +163,9 @@ otel_collector:
 #   image_name: "grafana/otel-lgtm:latest"
 #   # metrics_port: 8080 (default)
 #   # metrics_path: "/metrics" (default)
+=======
+  image_name: "public.ecr.aws/aws-observability/aws-otel-collector:v0.30.0"
+
 
 # =============================================================================
 # GITHUB ACTION WORKFLOW EXAMPLE
@@ -226,12 +226,17 @@ otel_collector:
 # - With fluent_bit_collector: Uses Fluent Bit for advanced log routing and processing
 
 # OpenTelemetry:
+
 # - Default AWS image: Uses SSM Parameter Store for configuration (env:SSM_CONFIG)
 # - Custom image: Uses file-based configuration (/conf/{extra_config} or /conf/config.yaml)
 # - Environment variables added for custom images:
 #   * SERVICE_NAME: Set to the application name
 #   * CUSTOM_PORT: Set to metrics_port value (if specified)
 # - Always exposes ports 4317 (gRPC) and 4318 (HTTP) for OTLP
+
+# - Enables distributed tracing and metrics collection
+# - Requires proper OTEL configuration in AWS Systems Manager Parameter Store
+
 
 # Port Configuration:
 # - port: Main application port
