@@ -63,14 +63,18 @@ health_check:
 # =============================================================================
 
 # Environment variables passed to the container
+# Values are automatically converted to strings for ECS compatibility
 envs:
   - NODE_ENV: production
   - API_VERSION: v1
   - LOG_LEVEL: info
   - DATABASE_URL: postgresql://localhost:5432/myapp
   - REDIS_URL: redis://localhost:6379
-  - MAX_CONNECTIONS: "100"
-  - ENABLE_METRICS: "true"
+  - MAX_CONNECTIONS: 100          # Integer - will be converted to "100"
+  - TIMEOUT_SECONDS: 30           # Integer - will be converted to "30"
+  - ENABLE_METRICS: true          # Boolean - will be converted to "True"
+  - DEBUG_MODE: false             # Boolean - will be converted to "False"
+  - API_RATE_LIMIT: 1000.5        # Float - will be converted to "1000.5"
 
 # =============================================================================
 # SECRETS MANAGEMENT

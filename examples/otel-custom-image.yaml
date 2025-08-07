@@ -9,10 +9,12 @@ memory: 1024
 cpu_arch: X86_64
 role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
 
-# Basic environment variables
+# Basic environment variables (values automatically converted to strings)
 envs:
   - NODE_ENV: production
-  - API_VERSION: v1
+  - API_VERSION: 1              # Integer becomes "1"
+  - TIMEOUT: 30                 # Integer becomes "30"
+  - DEBUG: false                # Boolean becomes "False"
 
 # Main application port
 port: 8080

@@ -88,7 +88,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
         for key, value in env_var.items():
             environment.append({
                 "name": key,
-                "value": value
+                "value": str(value)  # Convert to string for ECS compatibility
             })
     
     # Get secrets directly from YAML without AWS access
