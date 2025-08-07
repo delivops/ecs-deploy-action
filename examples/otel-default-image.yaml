@@ -2,7 +2,7 @@
 # This example shows how to use the official AWS OTEL collector image
 # with a custom configuration stored in AWS Systems Manager Parameter Store
 
-name: app-with-default-otel
+# Note: 'name' field is no longer required - service name comes from the action
 replica_count: 2
 cpu: 512
 memory: 1024

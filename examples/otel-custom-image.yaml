@@ -2,7 +2,7 @@
 # This example shows how to use a custom OTEL collector image
 # with file-based configuration and custom metrics port
 
-name: app-with-custom-otel
+# Note: 'name' field is no longer required - service name comes from the action
 replica_count: 2
 cpu: 512
 memory: 1024

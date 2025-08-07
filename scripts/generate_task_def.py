@@ -5,7 +5,7 @@ import argparse
 import sys
 import os
 
-def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=None, container_registry=None, image_name=None, tag=None, public_image=None):
+def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=None, container_registry=None, image_name=None, tag=None, service_name=None, public_image=None):
     """
     Generate an ECS task definition from a simplified YAML configuration
     
@@ -25,7 +25,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
         config = yaml.safe_load(file)
     
     # Extract values from config
-    app_name = config.get('name', 'app')
+    # Use service name from action instead of YAML name
+    app_name = service_name if service_name else config.get('name', 'app')
     cpu = str(config.get('cpu', 256))
     memory = str(config.get('memory', 512))
     # OTEL Collector block (new format)
@@ -446,6 +447,7 @@ def parse_args():
     parser.add_argument('container_registry', help='ECR registry URL for main container')
     parser.add_argument('image_name', help='Container image name')
     parser.add_argument('tag', help='Container image tag')
+    parser.add_argument('service_name', help='ECS service name')
     parser.add_argument('--output', default='task-definition.json', help='Output file path (default: task-definition.json)')
     
     return parser.parse_args()
@@ -461,7 +463,8 @@ if __name__ == "__main__":
             args.registry,
             args.container_registry,
             args.image_name,
-            args.tag
+            args.tag,
+            args.service_name
         )
         
         # Write to the specified output file

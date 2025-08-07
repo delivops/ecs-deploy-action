@@ -1,12 +1,20 @@
-# Full Example - ECS Deploy Action Configuration
+# F# =============================================================================
+# BASIC CONFIGURATION
+# =============================================================================
+
+# Note: Application name now comes from the ECS service name in the action
+# No need to specify 'name' field in YAML anymore
+
+# Number of desired instances/replicas of this service
+replica_count: 3le - ECS Deploy Action Configuration
 # This file demonstrates all available configuration options for the ECS Deploy Action
 
 # =============================================================================
 # BASIC CONFIGURATION
 # =============================================================================
 
-# Application name - used in naming conventions for logs and task definitions
-name: my-app
+# Note: Application name now comes from the ECS service name in the action
+# No need to specify 'name' field in YAML anymore
 
 # Number of desired instances/replicas of this service
 replica_count: 3
