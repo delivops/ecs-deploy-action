@@ -34,7 +34,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
         otel_collector_image_name = otel_collector.get('image_name', '').strip()
         otel_collector_ssm = otel_collector.get('ssm_name', 'adot-config-global.yaml').strip()
         otel_extra_config = otel_collector.get('extra_config', '').strip()
-        otel_metrics_port = otel_collector.get('metrics_port')
+        otel_metrics_port = otel_collector.get('metrics_port', 8080)  # Default to 8080
+        otel_metrics_path = otel_collector.get('metrics_path', '/metrics')  # Default to /metrics
         otel_is_custom_image = bool(otel_collector_image_name)
         if not otel_collector_image_name:
             otel_collector_image = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
@@ -284,7 +285,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
         fluent_bit_container = {
             "name": "fluent-bit",
             "image": fluent_bit_image,  # Always ECR-style
-            "essential": False,
+            "essential": True,  # Critical sidecar - if it fails, task should fail
             "environment": [
                 {"name": "SERVICE_NAME", "value": app_name}
             ],
@@ -322,12 +323,17 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
         # Build environment variables for OTEL container
         otel_environment = []
         
-        # Add CUSTOM_PORT if metrics_port is specified
-        if otel_metrics_port is not None:
-            otel_environment.append({
-                "name": "CUSTOM_PORT",
-                "value": str(otel_metrics_port)
-            })
+        # Always add METRICS_PATH (default: /metrics)
+        otel_environment.append({
+            "name": "METRICS_PATH",
+            "value": otel_metrics_path
+        })
+        
+        # Always add CUSTOM_PORT (default: 8080)
+        otel_environment.append({
+            "name": "CUSTOM_PORT",
+            "value": str(otel_metrics_port)
+        })
         
         # Add SERVICE_NAME if using custom image (not default AWS image)
         if otel_is_custom_image:
@@ -374,7 +380,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
                     "protocol": "tcp"
                 }
             ],
-            "essential": False,
+            "essential": True,  # Critical sidecar - if it fails, task should fail
             "command": otel_command,
             "logConfiguration": {
                 "logDriver": "awslogs",

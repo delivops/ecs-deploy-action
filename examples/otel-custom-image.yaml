@@ -22,6 +22,7 @@ otel_collector:
   image_name: "amazon/config"     # Custom OTEL collector image (ECR if ecr_registry=true, public if ecr_registry=false)
   extra_config: "config.yaml"    # Config file located at /conf/config.yaml in container
   metrics_port: 5000             # Custom metrics port (becomes CUSTOM_PORT env var)
+  metrics_path: "/custom/metrics" # Custom metrics path (becomes METRICS_PATH env var, default: /metrics)
 
 # How this works:
 # 1. Image depends on ecr_registry setting in workflow:
@@ -32,6 +33,7 @@ otel_collector:
 # 4. Environment variables added to OTEL container:
 #    - SERVICE_NAME: "app-with-custom-otel" (app name)
 #    - CUSTOM_PORT: "5000" (metrics port)
+#    - METRICS_PATH: "/custom/metrics" (metrics path)
 # 5. No SSM configuration is used (file-based config instead)
 
 # Prerequisites:

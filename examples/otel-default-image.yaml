@@ -22,6 +22,8 @@ otel_collector:
   # No image_name specified - uses default AWS OTEL collector
   # image: public.ecr.aws/aws-observability/aws-otel-collector:latest
   ssm_name: "my-ssm"  # Custom SSM parameter name containing OTEL config
+  # metrics_port: 8080  # Optional - defaults to 8080
+  # metrics_path: "/metrics"  # Optional - defaults to /metrics
 
 # How this works:
 # 1. Uses the official AWS OTEL collector image
@@ -29,7 +31,10 @@ otel_collector:
 # 3. Parameter name: "my-ssm" (instead of default "adot-config-global.yaml")
 # 4. Command used: --config env:SSM_CONFIG
 # 5. SSM_CONFIG environment variable contains the config from "my-ssm"
-# 6. No SERVICE_NAME environment variable is added (only for custom images)
+# 6. Environment variables added to OTEL container:
+#    - METRICS_PATH: "/metrics" (default)
+#    - CUSTOM_PORT: "8080" (default)
+# 7. No SERVICE_NAME environment variable is added (only for custom images)
 
 # Prerequisites:
 # - Create a parameter in AWS Systems Manager called "my-ssm"

@@ -112,14 +112,19 @@ otel_collector:
   # For default AWS image: SSM parameter name containing the configuration
   ssm_name: "my-app-otel-config.yaml"
   
-  # Optional: Custom metrics port (will be available as CUSTOM_PORT env var)
+  # Optional: Custom metrics port (will be available as CUSTOM_PORT env var, default: 8080)
   metrics_port: 8888
+  
+  # Optional: Custom metrics path (will be available as METRICS_PATH env var, default: /metrics)
+  metrics_path: "/custom/metrics"
 
 # Example configurations for different scenarios:
 
 # Scenario 1: Default AWS OTEL Collector (uses SSM config)
 # otel_collector:
 #   ssm_name: "production-otel-config.yaml"
+#   # metrics_port: 8080 (default)
+#   # metrics_path: "/metrics" (default)
 
 # Scenario 2: Custom OTEL image respecting ecr_registry setting
 # otel_collector:
@@ -128,11 +133,13 @@ otel_collector:
 #   # ecr_registry=false: my-company/otel-collector:v2.0.0 (public)
 #   extra_config: "custom-config.yaml"
 #   metrics_port: 9090
+#   metrics_path: "/prometheus/metrics"
 
-# Scenario 3: Public OTEL image (like Grafana's)
+# Scenario 3: Minimal configuration (all defaults)
 # otel_collector:
-#   image_name: "grafana/otel-lgtm:latest"   # Will use as-is if ecr_registry=false
-#   metrics_port: 8080
+#   image_name: "grafana/otel-lgtm:latest"
+#   # metrics_port: 8080 (default)
+#   # metrics_path: "/metrics" (default)
 
 # =============================================================================
 # GITHUB ACTION WORKFLOW EXAMPLE
