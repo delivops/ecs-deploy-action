@@ -93,13 +93,27 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
     
     # Get secrets directly from YAML without AWS access
     secrets = []
+    
+    # Support old format: secrets (existing behavior)
     secret_list = config.get('secrets', [])
-    for secret_dict in secret_list:
-        for key, base_arn in secret_dict.items():
-            secrets.append({
-                "name": key,
-                "valueFrom": f"{base_arn}:{key}::"
-            })
+    if secret_list:
+        for secret_dict in secret_list:
+            for key, base_arn in secret_dict.items():
+                secrets.append({
+                    "name": key,
+                    "valueFrom": f"{base_arn}:{key}::"
+                })
+    else:
+        # Support new format: secrets_envs (if old format not present)
+        secrets_envs = config.get('secrets_envs', [])
+        for secret_config in secrets_envs:
+            secret_id = secret_config.get('id', '')
+            secret_values = secret_config.get('values', [])
+            for key in secret_values:
+                secrets.append({
+                    "name": key,
+                    "valueFrom": f"{secret_id}:{key}::"
+                })
     
     # Check for secret_files configuration (multiple files now supported)
     secret_files = config.get('secret_files', [])

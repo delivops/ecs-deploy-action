@@ -80,11 +80,25 @@ envs:
 # SECRETS MANAGEMENT
 # =============================================================================
 
-# Secrets from AWS Secrets Manager (injected as environment variables)
+# Two ways to define secrets (choose one):
+
+# Method 1: Classic format (still supported)
 secrets:
   - DATABASE_PASSWORD: arn:aws:secretsmanager:us-east-1:123456789012:secret:prod-db-password
   - API_KEY: arn:aws:secretsmanager:us-east-1:123456789012:secret:external-api-key
   - JWT_SECRET: arn:aws:secretsmanager:us-east-1:123456789012:secret:jwt-signing-key
+
+# Method 2: New grouped format (alternative to above - don't use both!)
+# secrets_envs:
+#   - id: arn:aws:secretsmanager:us-east-1:123456789012:secret:app-secrets-abc123
+#     values:
+#       - DATABASE_PASSWORD
+#       - API_KEY
+#       - JWT_SECRET
+#   - id: arn:aws:secretsmanager:us-east-1:123456789012:secret:external-services-def456
+#     values:
+#       - STRIPE_API_KEY
+#       - SENDGRID_API_KEY
 
 # Secret files (downloaded to /etc/secrets/ during container startup)
 secret_files:
