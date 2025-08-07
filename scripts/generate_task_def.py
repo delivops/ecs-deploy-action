@@ -5,14 +5,15 @@ import argparse
 import sys
 import os
 
-def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=None, image_name=None, tag=None, public_image=None):
+def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=None, container_registry=None, image_name=None, tag=None, service_name=None, public_image=None):
     """
     Generate an ECS task definition from a simplified YAML configuration
     
     Args:
         yaml_file_path (str): Path to the YAML configuration file
         aws_region (str): AWS region to use for log configuration
-        registry (str): ECR registry URL
+        registry (str): ECR registry URL for sidecars (OTEL/Fluent Bit)
+        container_registry (str): ECR registry URL for main container
         image_name (str): Image name
         tag (str): Image tag
     
@@ -24,18 +25,30 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
         config = yaml.safe_load(file)
     
     # Extract values from config
-    app_name = config.get('name', 'app')
+    # Use service name from action instead of YAML name
+    app_name = service_name if service_name else config.get('name', 'app')
     cpu = str(config.get('cpu', 256))
     memory = str(config.get('memory', 512))
     # OTEL Collector block (new format)
     otel_collector = config.get('otel_collector')
     if otel_collector is not None:
-        otel_collector_image = otel_collector.get('image_name', '').strip()
+        otel_collector_image_name = otel_collector.get('image_name', '').strip()
         otel_collector_ssm = otel_collector.get('ssm_name', 'adot-config-global.yaml').strip()
-        if not otel_collector_image:
+        otel_extra_config = otel_collector.get('extra_config', '').strip()
+        otel_metrics_port = otel_collector.get('metrics_port', 8080)  # Default to 8080
+        otel_metrics_path = otel_collector.get('metrics_path', '/metrics')  # Default to /metrics
+        otel_is_custom_image = bool(otel_collector_image_name)
+        if not otel_collector_image_name:
             otel_collector_image = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
+        else:
+            # Custom image name - ALWAYS use ECR registry (private image)
+            print(f"Debug: registry='{registry}', otel_collector_image_name='{otel_collector_image_name}'")
+            # Registry is always available for OTEL/Fluent Bit
+            otel_collector_image = f"{registry}/{otel_collector_image_name}"
+            print(f"Debug: Using ECR registry - otel_collector_image='{otel_collector_image}'")
     else:
         otel_collector_image = None
+        otel_is_custom_image = False
     cpu_arch = config.get('cpu_arch', 'X86_64')
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
@@ -61,9 +74,10 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
     config_name = fluent_bit_collector.get('extra_config', "extra.conf")
     ecs_log_metadata = fluent_bit_collector.get('ecs_log_metadata', 'true')
     extra_config = f"extra/{config_name}"
-    # Use ECR-style image for fluent-bit sidecar, using fluent_bit_collector.image_name (without tag)
+    # Handle fluent-bit image - ALWAYS ECR if image_name is specified
     if use_fluent_bit:
         fluent_bit_image_name = fluent_bit_collector.get('image_name', '').strip()
+        # Registry is always available for OTEL/Fluent Bit
         fluent_bit_image = f"{registry}/{fluent_bit_image_name}"
     else:
         fluent_bit_image = ''
@@ -74,18 +88,32 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
         for key, value in env_var.items():
             environment.append({
                 "name": key,
-                "value": value
+                "value": str(value)  # Convert to string for ECS compatibility
             })
     
     # Get secrets directly from YAML without AWS access
     secrets = []
+    
+    # Support old format: secrets (existing behavior)
     secret_list = config.get('secrets', [])
-    for secret_dict in secret_list:
-        for key, base_arn in secret_dict.items():
-            secrets.append({
-                "name": key,
-                "valueFrom": f"{base_arn}:{key}::"
-            })
+    if secret_list:
+        for secret_dict in secret_list:
+            for key, base_arn in secret_dict.items():
+                secrets.append({
+                    "name": key,
+                    "valueFrom": f"{base_arn}:{key}::"
+                })
+    else:
+        # Support new format: secrets_envs (if old format not present)
+        secrets_envs = config.get('secrets_envs', [])
+        for secret_config in secrets_envs:
+            secret_id = secret_config.get('id', '')
+            secret_values = secret_config.get('values', [])
+            for key in secret_values:
+                secrets.append({
+                    "name": key,
+                    "valueFrom": f"{secret_id}:{key}::"
+                })
     
     # Check for secret_files configuration (multiple files now supported)
     secret_files = config.get('secret_files', [])
@@ -114,8 +142,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
 
     image_name_clean, tag_clean = parse_image_parts(image_name, tag)
 
-    if registry:
-        image_uri = f"{registry}/{image_name_clean}:{tag_clean}"
+    if container_registry and container_registry.strip():
+        image_uri = f"{container_registry}/{image_name_clean}:{tag_clean}"
     else:
         image_uri = f"{image_name_clean}:{tag_clean}"
     
@@ -272,7 +300,7 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
         fluent_bit_container = {
             "name": "fluent-bit",
             "image": fluent_bit_image,  # Always ECR-style
-            "essential": False,
+            "essential": True,  # Critical sidecar - if it fails, task should fail
             "environment": [
                 {"name": "SERVICE_NAME", "value": app_name},
                 {"name": "ENV", "value": cluster_name}
@@ -308,6 +336,48 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
     
     # Add the OpenTelemetry collector container if enabled (new format)
     if otel_collector_image is not None:
+        # Build environment variables for OTEL container
+        otel_environment = []
+        
+        # Always add METRICS_PATH (default: /metrics)
+        otel_environment.append({
+            "name": "METRICS_PATH",
+            "value": otel_metrics_path
+        })
+        
+        # Always add METRICS_PORT (default: 8080)
+        otel_environment.append({
+            "name": "METRICS_PORT",
+            "value": str(otel_metrics_port)
+        })
+        
+        # Add SERVICE_NAME if using custom image (not default AWS image)
+        if otel_is_custom_image:
+            otel_environment.append({
+                "name": "SERVICE_NAME",
+                "value": app_name
+            })
+        
+        # Build command based on image type
+        if otel_is_custom_image and otel_extra_config:
+            # Custom image with extra config file
+            otel_command = [
+                "--config",
+                f"/conf/{otel_extra_config}"
+            ]
+        elif otel_is_custom_image:
+            # Custom image without extra config (use default config path)
+            otel_command = [
+                "--config",
+                "/conf/config.yaml"
+            ]
+        else:
+            # Default AWS image - use SSM config
+            otel_command = [
+                "--config",
+                "env:SSM_CONFIG"
+            ]
+        
         otel_container = {
             "name": "otel-collector",
             "image": otel_collector_image,  # Use as-is from YAML or default
@@ -326,19 +396,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
                     "protocol": "tcp"
                 }
             ],
-            "essential": False,
-            # Remove SSM config logic if not needed
-            "command": [
-                "--config",
-                "env:SSM_CONFIG"
-            ],
-            "secrets": [
-                {
-                    "name": "SSM_CONFIG",
-                    "valueFrom": otel_collector_ssm
-                }
-            ],
-            # Optionally remove secrets if not needed, or keep if required
+            "essential": True,  # Critical sidecar - if it fails, task should fail
+            "command": otel_command,
             "logConfiguration": {
                 "logDriver": "awslogs",
                 "options": {
@@ -348,6 +407,20 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
                 }
             }
         }
+        
+        # Add environment variables if any
+        if otel_environment:
+            otel_container["environment"] = otel_environment
+        
+        # Add secrets only for default AWS image
+        if not otel_is_custom_image:
+            otel_container["secrets"] = [
+                {
+                    "name": "SSM_CONFIG",
+                    "valueFrom": otel_collector_ssm
+                }
+            ]
+        
         container_definitions.append(otel_container)
     
     # Create the complete task definition
@@ -384,9 +457,11 @@ def parse_args():
     parser.add_argument('yaml_file', help='Path to the YAML configuration file')
     parser.add_argument('cluster_name', help='The cluster name')
     parser.add_argument('aws_region', help='AWS region for log configuration')
-    parser.add_argument('registry', help='ECR registry URL')
+    parser.add_argument('registry', help='ECR registry URL for sidecars (OTEL/Fluent Bit)')
+    parser.add_argument('container_registry', help='ECR registry URL for main container')
     parser.add_argument('image_name', help='Container image name')
     parser.add_argument('tag', help='Container image tag')
+    parser.add_argument('service_name', help='ECS service name')
     parser.add_argument('--output', default='task-definition.json', help='Output file path (default: task-definition.json)')
     
     return parser.parse_args()
@@ -400,8 +475,10 @@ if __name__ == "__main__":
             args.cluster_name,
             args.aws_region,
             args.registry,
+            args.container_registry,
             args.image_name,
-            args.tag
+            args.tag,
+            args.service_name
         )
         
         # Write to the specified output file

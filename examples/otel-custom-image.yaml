@@ -1,0 +1,44 @@
+# Example: Using Custom OTEL Collector Image with File-based Config
+# This example shows how to use a custom OTEL collector image
+# with file-based configuration and custom metrics port
+
+# Note: 'name' field is no longer required - service name comes from the action
+replica_count: 2
+cpu: 512
+memory: 1024
+cpu_arch: X86_64
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+
+# Basic environment variables (values automatically converted to strings)
+envs:
+  - NODE_ENV: production
+  - API_VERSION: 1              # Integer becomes "1"
+  - TIMEOUT: 30                 # Integer becomes "30"
+  - DEBUG: false                # Boolean becomes "False"
+
+# Main application port
+port: 8080
+
+# OpenTelemetry collector using custom image
+otel_collector:
+  image_name: "amazon/config"     # Custom OTEL collector image (ECR if ecr_registry=true, public if ecr_registry=false)
+  extra_config: "config.yaml"    # Config file located at /conf/config.yaml in container
+  metrics_port: 5000             # Custom metrics port (becomes METRICS_PORT env var)
+  metrics_path: "/custom/metrics" # Custom metrics path (becomes METRICS_PATH env var, default: /metrics)
+
+# How this works:
+# 1. Image depends on ecr_registry setting in workflow:
+#    - ecr_registry: true  -> "{registry}/amazon/config" (private ECR)
+#    - ecr_registry: false -> "amazon/config" (public image, e.g., Docker Hub)
+# 2. Configuration is loaded from file: /conf/config.yaml inside the container
+# 3. Command used: --config /conf/config.yaml
+# 4. Environment variables added to OTEL container:
+#    - SERVICE_NAME: "app-with-custom-otel" (app name)
+#    - METRICS_PORT: "5000" (metrics port)
+#    - METRICS_PATH: "/custom/metrics" (metrics path)
+# 5. No SSM configuration is used (file-based config instead)
+
+# Prerequisites:
+# - If ecr_registry=true: The image should exist in your ECR registry
+# - If ecr_registry=false: The image should be available publicly (Docker Hub, etc.)
+# - The image should have the config file at /conf/config.yaml

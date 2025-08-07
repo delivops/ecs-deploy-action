@@ -51,10 +51,14 @@ runs:
       uses: aws-actions/amazon-ecr-login@v2
     - id: define-registry
       run: |
+        # Always set registry for OTEL/Fluent Bit (they're always ECR)
+        echo "registry=${{ steps.login_ecr.outputs.registry }}" >> $GITHUB_OUTPUT
+        
+        # Set container_registry only if ecr_registry is true (for main app)
         if [ "${{ inputs.ecr_registry }}" == "true" ]; then
-          echo "registry=${{ steps.login_ecr.outputs.registry }}" >> $GITHUB_OUTPUT
+          echo "container_registry=${{ steps.login_ecr.outputs.registry }}" >> $GITHUB_OUTPUT
         else
-          echo "registry=" >> $GITHUB_OUTPUT
+          echo "container_registry=" >> $GITHUB_OUTPUT
         fi
       shell: bash
       
@@ -65,8 +69,10 @@ runs:
           "${{ inputs.ecs_cluster }}" \
           "${{ inputs.aws_region }}" \
           "${{ steps.define-registry.outputs.registry }}" \
+          "${{ steps.define-registry.outputs.container_registry }}" \
           "${{ inputs.image_name }}" \
-          "${{ inputs.tag }}" 
+          "${{ inputs.tag }}" \
+          "${{ inputs.ecs_service }}"
       shell: bash
 
     - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.3.2

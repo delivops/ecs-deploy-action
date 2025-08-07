@@ -1,0 +1,42 @@
+# Example: Using Default AWS OTEL Collector with Custom SSM Config
+# This example shows how to use the official AWS OTEL collector image
+# with a custom configuration stored in AWS Systems Manager Parameter Store
+
+# Note: 'name' field is no longer required - service name comes from the action
+replica_count: 2
+cpu: 512
+memory: 1024
+cpu_arch: X86_64
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+
+# Basic environment variables
+envs:
+  - NODE_ENV: production
+  - API_VERSION: v1
+
+# Main application port
+port: 8080
+
+# OpenTelemetry collector using default AWS image
+otel_collector:
+  # No image_name specified - uses default AWS OTEL collector
+  # image: public.ecr.aws/aws-observability/aws-otel-collector:latest
+  ssm_name: "my-ssm"  # Custom SSM parameter name containing OTEL config
+  # metrics_port: 8080  # Optional - defaults to 8080
+  # metrics_path: "/metrics"  # Optional - defaults to /metrics
+
+# How this works:
+# 1. Uses the official AWS OTEL collector image
+# 2. Configuration is loaded from AWS Systems Manager Parameter Store
+# 3. Parameter name: "my-ssm" (instead of default "adot-config-global.yaml")
+# 4. Command used: --config env:SSM_CONFIG
+# 5. SSM_CONFIG environment variable contains the config from "my-ssm"
+# 6. Environment variables added to OTEL container:
+#    - METRICS_PATH: "/metrics" (default)
+#    - METRICS_PORT: "8080" (default)
+# 7. No SERVICE_NAME environment variable is added (only for custom images)
+
+# Prerequisites:
+# - Create a parameter in AWS Systems Manager called "my-ssm"
+# - The parameter should contain your OTEL collector configuration in YAML format
+# - ECS task role needs permissions to read from Systems Manager Parameter Store
