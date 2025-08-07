@@ -112,7 +112,7 @@ otel_collector:
   # For default AWS image: SSM parameter name containing the configuration
   ssm_name: "my-app-otel-config.yaml"
   
-  # Optional: Custom metrics port (will be available as CUSTOM_PORT env var, default: 8080)
+  # Optional: Custom metrics port (will be available as METRICS_PORT env var, default: 8080)
   metrics_port: 8888
   
   # Optional: Custom metrics path (will be available as METRICS_PATH env var, default: /metrics)

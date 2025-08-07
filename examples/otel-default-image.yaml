@@ -33,7 +33,7 @@ otel_collector:
 # 5. SSM_CONFIG environment variable contains the config from "my-ssm"
 # 6. Environment variables added to OTEL container:
 #    - METRICS_PATH: "/metrics" (default)
-#    - CUSTOM_PORT: "8080" (default)
+#    - METRICS_PORT: "8080" (default)
 # 7. No SERVICE_NAME environment variable is added (only for custom images)
 
 # Prerequisites:
