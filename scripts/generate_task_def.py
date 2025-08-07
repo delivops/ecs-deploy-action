@@ -287,7 +287,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
             "image": fluent_bit_image,  # Always ECR-style
             "essential": True,  # Critical sidecar - if it fails, task should fail
             "environment": [
-                {"name": "SERVICE_NAME", "value": app_name}
+                {"name": "SERVICE_NAME", "value": app_name},
+                {"name": "ENV", "value": cluster_name}
             ],
             "healthCheck": {
                 "command": [
