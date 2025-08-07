@@ -329,9 +329,9 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
             "value": otel_metrics_path
         })
         
-        # Always add CUSTOM_PORT (default: 8080)
+        # Always add METRICS_PORT (default: 8080)
         otel_environment.append({
-            "name": "CUSTOM_PORT",
+            "name": "METRICS_PORT",
             "value": str(otel_metrics_port)
         })
         
