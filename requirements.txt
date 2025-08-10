@@ -1,0 +1,2 @@
+# Python dependencies for ECS task definition generator
+PyYAML>=6.0,<7.0

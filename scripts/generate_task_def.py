@@ -3,7 +3,235 @@ import yaml
 import json
 import argparse
 import sys
-import os
+import logging
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass, field
+from pathlib import Path
+from enum import Enum
+
+class LogLevel(Enum):
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+
+class ValidationError(Exception):
+    """Custom exception for validation errors"""
+    pass
+
+@dataclass
+class TaskConfig:
+    """Configuration for ECS task definition"""
+    name: str
+    cpu: str = "256"
+    memory: str = "512"
+    cpu_arch: str = "X86_64"
+    command: List[str] = field(default_factory=list)
+    entrypoint: List[str] = field(default_factory=list)
+    port: Optional[int] = None
+    additional_ports: List[Dict[str, int]] = field(default_factory=list)
+    role_arn: str = ""
+    replica_count: str = ""
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TaskConfig':
+        return cls(
+            name=data.get('name', 'app'),
+            cpu=str(data.get('cpu', 256)),
+            memory=str(data.get('memory', 512)),
+            cpu_arch=data.get('cpu_arch', 'X86_64'),
+            command=data.get('command', []),
+            entrypoint=data.get('entrypoint', []),
+            port=data.get('port'),
+            additional_ports=data.get('additional_ports', []),
+            role_arn=data.get('role_arn', ''),
+            replica_count=data.get('replica_count', '')
+        )
+
+def setup_logging(level: str = "INFO") -> logging.Logger:
+    """Setup logging configuration"""
+    logging.basicConfig(
+        level=getattr(logging, level.upper()),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stderr)  # Send logs to stderr instead of stdout
+        ]
+    )
+    return logging.getLogger(__name__)
+
+# Initialize logger
+logger = setup_logging()
+
+def validate_config(config: Dict[str, Any]) -> None:
+    """Validate the YAML configuration"""
+    # Note: 'name' field is not required since service_name can be used instead
+    # No required fields validation for now
+    
+    # Validate CPU and memory values
+    cpu = config.get('cpu', 256)
+    memory = config.get('memory', 512)
+    
+    valid_cpu_values = [256, 512, 1024, 2048, 4096]
+    if cpu not in valid_cpu_values:
+        raise ValidationError(f"Invalid CPU value: {cpu}. Must be one of {valid_cpu_values}")
+    
+    # Validate memory based on CPU
+    valid_memory_for_cpu = {
+        256: [512, 1024, 2048],
+        512: [1024, 2048, 3072, 4096],
+        1024: [2048, 3072, 4096, 5120, 6144, 7168, 8192],
+        2048: list(range(4096, 16385, 1024)),
+        4096: list(range(8192, 30721, 1024))
+    }
+    
+    if memory not in valid_memory_for_cpu.get(cpu, []):
+        raise ValidationError(f"Invalid memory value {memory} for CPU {cpu}")
+
+def load_and_validate_config(yaml_file_path: str) -> Dict[str, Any]:
+    """Load and validate YAML configuration"""
+    try:
+        yaml_path = Path(yaml_file_path)
+        if not yaml_path.exists():
+            raise FileNotFoundError(f"YAML file not found: {yaml_file_path}")
+        
+        with yaml_path.open('r') as file:
+            config = yaml.safe_load(file)
+        
+        if not config:
+            raise ValidationError("YAML file is empty or invalid")
+        
+        validate_config(config)
+        logger.info(f"Successfully loaded and validated configuration from {yaml_file_path}")
+        return config
+        
+    except yaml.YAMLError as e:
+        raise ValidationError(f"Invalid YAML format: {e}")
+
+class ContainerBuilder:
+    """Builder class for container configurations"""
+    
+    def __init__(self, cluster_name: str, app_name: str, aws_region: str):
+        self.cluster_name = cluster_name
+        self.app_name = app_name
+        self.aws_region = aws_region
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+    
+    def build_log_configuration(self, log_driver: str = "awslogs", 
+                              stream_prefix: str = "default") -> Dict[str, Any]:
+        """Build standard log configuration"""
+        # Add leading slash only for "default" stream prefix for compatibility
+        if stream_prefix == "default":
+            stream_prefix = "/default"
+            
+        return {
+            "logDriver": log_driver,
+            "options": {
+                "awslogs-group": f"/ecs/{self.cluster_name}/{self.app_name}",
+                "awslogs-region": self.aws_region,
+                "awslogs-stream-prefix": stream_prefix
+            }
+        }
+    
+    def build_port_mappings(self, main_port: Optional[int], 
+                           additional_ports: List[Dict[str, int]]) -> List[Dict[str, Any]]:
+        """Build port mappings configuration"""
+        port_mappings = []
+        
+        if main_port:
+            port_mappings.append({
+                "name": "default",
+                "containerPort": main_port,
+                "hostPort": main_port,
+                "protocol": "tcp",
+                "appProtocol": "http"
+            })
+        
+        for port_info in additional_ports:
+            if isinstance(port_info, dict):
+                for name, port in port_info.items():
+                    port_mappings.append({
+                        "name": name,
+                        "containerPort": port,
+                        "hostPort": port,
+                        "protocol": "tcp",
+                        "appProtocol": "http"
+                    })
+        
+        self.logger.debug(f"Built {len(port_mappings)} port mappings")
+        return port_mappings
+
+class SecretManager:
+    """Handle secrets configuration"""
+    
+    @staticmethod
+    def build_secrets_from_config(config: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Build secrets configuration from YAML config"""
+        secrets = []
+        
+        # Legacy format support
+        secret_list = config.get('secrets', [])
+        if secret_list:
+            for secret_dict in secret_list:
+                for key, base_arn in secret_dict.items():
+                    secrets.append({
+                        "name": key,
+                        "valueFrom": f"{base_arn}:{key}::"
+                    })
+            logger.info(f"Built {len(secrets)} secret configurations (legacy format)")
+            return secrets
+        
+        # New format
+        secrets_envs = config.get('secrets_envs', [])
+        for secret_config in secrets_envs:
+            secret_id = secret_config.get('id', '')
+            secret_values = secret_config.get('values', [])
+            
+            if not secret_id:
+                logger.warning("Secret configuration missing 'id' field")
+                continue
+                
+            for key in secret_values:
+                secrets.append({
+                    "name": key,
+                    "valueFrom": f"{secret_id}:{key}::"
+                })
+        
+        logger.info(f"Built {len(secrets)} secret configurations (new format)")
+        return secrets
+
+def parse_image_parts(image_name: str, tag: str) -> tuple[str, str]:
+    """Parse and clean image name and tag"""
+    logger.debug(f"Parsing image parts: image_name='{image_name}', tag='{tag}'")
+    
+    # Remove registry if mistakenly included in image_name
+    if '/' in image_name and '.' in image_name.split('/')[0]:
+        # Remove registry part
+        image_name = '/'.join(image_name.split('/')[1:])
+        logger.debug(f"Removed registry from image_name: '{image_name}'")
+    
+    # Remove tag from image_name if present
+    if ':' in image_name:
+        image_name, image_tag = image_name.split(':', 1)
+        if not tag:
+            tag = image_tag
+            logger.debug(f"Extracted tag from image_name: '{tag}'")
+    
+    return image_name, tag
+
+def build_image_uri(container_registry: Optional[str], image_name: str, tag: str) -> str:
+    """Build container image URI with proper validation"""
+    logger.debug(f"Building image URI: registry={container_registry}, image={image_name}, tag={tag}")
+    
+    # Clean image name and tag
+    image_name_clean, tag_clean = parse_image_parts(image_name, tag)
+    
+    if container_registry and container_registry.strip():
+        image_uri = f"{container_registry}/{image_name_clean}:{tag_clean}"
+    else:
+        image_uri = f"{image_name_clean}:{tag_clean}"
+    
+    logger.info(f"Container image URI: {image_uri}")
+    return image_uri
 
 def build_init_containers(config, secret_files, cluster_name, app_name, aws_region):
     """Build init containers for secret file downloads"""
@@ -12,6 +240,8 @@ def build_init_containers(config, secret_files, cluster_name, app_name, aws_regi
     if secret_files:
         # Join secret names with commas for the environment variable
         secret_files_env = ",".join(secret_files)
+        
+        container_builder = ContainerBuilder(cluster_name, app_name, aws_region)
         
         init_container = {
             "name": "init-container-for-secret-files",
@@ -45,16 +275,10 @@ def build_init_containers(config, secret_files, cluster_name, app_name, aws_regi
                     "containerPath": "/etc/secrets"
                 }
             ],
-            "logConfiguration": {
-                "logDriver": "awslogs",
-                "options": {
-                    "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
-                    "awslogs-region": aws_region,
-                    "awslogs-stream-prefix": "ssm-file-downloader"                
-                    }
-            }
+            "logConfiguration": container_builder.build_log_configuration(stream_prefix="ssm-file-downloader")
         }
         container_definitions.append(init_container)
+        logger.info(f"Built init container for {len(secret_files)} secret files")
     
     return container_definitions
 
@@ -62,6 +286,8 @@ def build_app_container(config, image_uri, environment, secrets, health, cluster
     """Build the main application container"""
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
+    
+    container_builder = ContainerBuilder(cluster_name, app_name, aws_region)
     
     app_container = {
         "name": "app",
@@ -80,50 +306,17 @@ def build_app_container(config, image_uri, environment, secrets, health, cluster
             "options": {}
         }
     else:
-        app_container["logConfiguration"] = {
-            "logDriver": "awslogs",
-            "options": {
-                "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
-                "awslogs-region": aws_region,
-                "awslogs-stream-prefix": "/default"
-            }
-        }
+        app_container["logConfiguration"] = container_builder.build_log_configuration(stream_prefix="default")
     
     # Only include healthCheck if it was properly built
     if health:
         app_container["healthCheck"] = health
 
-    # Handle port configurations with new naming
+    # Handle port configurations
     main_port = config.get('port')
     additional_ports = config.get('additional_ports', [])
     
-    port_mappings = []
-    
-    # Add main port if specified with default name
-    if main_port:
-        port_mapping = {
-            "name": "default",
-            "containerPort": main_port,
-            "hostPort": main_port,
-            "protocol": "tcp",
-            "appProtocol": "http"
-        }
-        port_mappings.append(port_mapping)
-    
-    # Add additional ports with their specified names
-    for port_info in additional_ports:
-        if isinstance(port_info, dict):
-            # Each item is expected to be a dict with one key-value pair
-            for name, port in port_info.items():
-                port_mapping = {
-                    "name": name,
-                    "containerPort": port,
-                    "hostPort": port,
-                    "protocol": "tcp",
-                    "appProtocol": "http"
-                }
-                port_mappings.append(port_mapping)
-    
+    port_mappings = container_builder.build_port_mappings(main_port, additional_ports)
     if port_mappings:
         app_container["portMappings"] = port_mappings
     
@@ -290,24 +483,31 @@ def build_otel_container(config, otel_collector_image, otel_is_custom_image, ote
     
     return otel_container
 
-def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=None, container_registry=None, image_name=None, tag=None, service_name=None, public_image=None):
+def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name=None, aws_region=None, registry=None, container_registry=None, image_name=None, tag=None, service_name=None, public_image=None):
     """
     Generate an ECS task definition from a simplified YAML configuration
     
     Args:
-        yaml_file_path (str): Path to the YAML configuration file
+        config_dict (dict): Pre-loaded configuration dictionary
+        yaml_file_path (str): Path to the YAML configuration file (if config_dict not provided)
+        cluster_name (str): ECS cluster name
         aws_region (str): AWS region to use for log configuration
         registry (str): ECR registry URL for sidecars (OTEL/Fluent Bit)
         container_registry (str): ECR registry URL for main container
         image_name (str): Image name
         tag (str): Image tag
+        service_name (str): ECS service name
     
     Returns:
         dict: The generated task definition
     """ 
-    # Read the YAML file
-    with open(yaml_file_path, 'r') as file:
-        config = yaml.safe_load(file)
+    # Load config if not provided
+    if config_dict is None:
+        if yaml_file_path is None:
+            raise ValidationError("Either config_dict or yaml_file_path must be provided")
+        config = load_and_validate_config(yaml_file_path)
+    else:
+        config = config_dict
     
     # Extract values from config
     # Use service name from action instead of YAML name
@@ -327,10 +527,10 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
             otel_collector_image = "public.ecr.aws/aws-observability/aws-otel-collector:latest"
         else:
             # Custom image name - ALWAYS use ECR registry (private image)
-            print(f"Debug: registry='{registry}', otel_collector_image_name='{otel_collector_image_name}'")
+            logger.debug(f"registry='{registry}', otel_collector_image_name='{otel_collector_image_name}'")
             # Registry is always available for OTEL/Fluent Bit
             otel_collector_image = f"{registry}/{otel_collector_image_name}"
-            print(f"Debug: Using ECR registry - otel_collector_image='{otel_collector_image}'")
+            logger.debug(f"Using ECR registry - otel_collector_image='{otel_collector_image}'")
     else:
         otel_collector_image = None
         otel_is_custom_image = False
@@ -376,29 +576,8 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
                 "value": str(value)  # Convert to string for ECS compatibility
             })
     
-    # Get secrets directly from YAML without AWS access
-    secrets = []
-    
-    # Support old format: secrets (existing behavior)
-    secret_list = config.get('secrets', [])
-    if secret_list:
-        for secret_dict in secret_list:
-            for key, base_arn in secret_dict.items():
-                secrets.append({
-                    "name": key,
-                    "valueFrom": f"{base_arn}:{key}::"
-                })
-    else:
-        # Support new format: secrets_envs (if old format not present)
-        secrets_envs = config.get('secrets_envs', [])
-        for secret_config in secrets_envs:
-            secret_id = secret_config.get('id', '')
-            secret_values = secret_config.get('values', [])
-            for key in secret_values:
-                secrets.append({
-                    "name": key,
-                    "valueFrom": f"{secret_id}:{key}::"
-                })
+    # Get secrets using the SecretManager
+    secrets = SecretManager.build_secrets_from_config(config)
     
     # Check for secret_files configuration (multiple files now supported)
     secret_files = config.get('secret_files', [])
@@ -413,29 +592,10 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
         })
 
     # Sanitize image_name and tag for ECR URI
-    def parse_image_parts(image_name, tag):
-        # Remove registry if mistakenly included in image_name
-        if '/' in image_name and '.' in image_name.split('/')[0]:
-            # Remove registry part
-            image_name = '/'.join(image_name.split('/')[1:])
-        # Remove tag from image_name if present
-        if ':' in image_name:
-            image_name, image_tag = image_name.split(':', 1)
-            if not tag:
-                tag = image_tag
-        return image_name, tag
-
     image_name_clean, tag_clean = parse_image_parts(image_name, tag)
-
-    if container_registry and container_registry.strip():
-        image_uri = f"{container_registry}/{image_name_clean}:{tag_clean}"
-    else:
-        image_uri = f"{image_name_clean}:{tag_clean}"
+    image_uri = build_image_uri(container_registry, image_name_clean, tag_clean)
     
-
-
-    
-    print(f"Setting container image to: {image_uri}")
+    logger.info(f"Setting container image to: {image_uri}")
     
     # Create the container definitions list
     container_definitions = []
@@ -480,52 +640,107 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
     if has_secret_files and volumes:
         task_definition["volumes"] = volumes
     
-    # Output the replica count to output
-    print(f"::set-output name=replica_count::{replica_count}")
-
     return task_definition
 
 def parse_args():
-    """Parse and validate command line arguments"""
-    parser = argparse.ArgumentParser(description='Generate ECS task definition from YAML configuration')
-    
-    parser.add_argument('yaml_file', help='Path to the YAML configuration file')
-    parser.add_argument('cluster_name', help='The cluster name')
-    parser.add_argument('aws_region', help='AWS region for log configuration')
-    parser.add_argument('registry', help='ECR registry URL for sidecars (OTEL/Fluent Bit)')
-    parser.add_argument('container_registry', help='ECR registry URL for main container')
-    parser.add_argument('image_name', help='Container image name')
-    parser.add_argument('tag', help='Container image tag')
-    parser.add_argument('service_name', help='ECS service name')
-    parser.add_argument('--output', default='task-definition.json', help='Output file path (default: task-definition.json)')
-    
-    return parser.parse_args()
+    """Parse and validate command line arguments with better help"""
+    parser = argparse.ArgumentParser(
+        description='Generate ECS task definition from YAML configuration',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s config.yaml my-cluster us-east-1 123456789.dkr.ecr.us-east-1.amazonaws.com \\
+    123456789.dkr.ecr.us-east-1.amazonaws.com my-app latest my-service
 
-if __name__ == "__main__":
-    args = parse_args()
+  %(prog)s config.yaml my-cluster us-east-1 --output custom-task-def.json
+        """
+    )
     
+    parser.add_argument('yaml_file', 
+                       help='Path to the YAML configuration file')
+    parser.add_argument('cluster_name', 
+                       help='ECS cluster name')
+    parser.add_argument('aws_region', 
+                       help='AWS region for log configuration')
+    parser.add_argument('registry', 
+                       help='ECR registry URL for sidecars (OTEL/Fluent Bit)')
+    parser.add_argument('container_registry', 
+                       help='ECR registry URL for main container')
+    parser.add_argument('image_name', 
+                       help='Container image name')
+    parser.add_argument('tag', 
+                       help='Container image tag')
+    parser.add_argument('service_name', 
+                       help='ECS service name')
+    parser.add_argument('--output', '-o', 
+                       default='task-definition.json',
+                       help='Output file path (default: %(default)s)')
+    parser.add_argument('--log-level', 
+                       choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                       default='INFO',
+                       help='Logging level (default: %(default)s)')
+    parser.add_argument('--validate-only', 
+                       action='store_true',
+                       help='Only validate configuration, do not generate output')
+    
+    args = parser.parse_args()
+    
+    # Validate arguments
+    if not Path(args.yaml_file).exists():
+        parser.error(f"YAML file does not exist: {args.yaml_file}")
+    
+    return args
+
+def main() -> None:
+    """Main function with proper error handling"""
     try:
+        args = parse_args()
+        
+        # Setup logging
+        global logger
+        logger = setup_logging(args.log_level)
+        
+        # Load and validate configuration
+        config = load_and_validate_config(args.yaml_file)
+        
+        if args.validate_only:
+            logger.info("Configuration validation successful")
+            return
+        
+        # Generate task definition
         task_definition = generate_task_definition(
-            args.yaml_file,
-            args.cluster_name,
-            args.aws_region,
-            args.registry,
-            args.container_registry,
-            args.image_name,
-            args.tag,
-            args.service_name
+            config_dict=config,
+            cluster_name=args.cluster_name,
+            aws_region=args.aws_region,
+            registry=args.registry,
+            container_registry=args.container_registry,
+            image_name=args.image_name,
+            tag=args.tag,
+            service_name=args.service_name
         )
         
-        # Write to the specified output file
-        with open(args.output, 'w') as file:
+        # Write output
+        output_path = Path(args.output)
+        with output_path.open('w') as file:
             json.dump(task_definition, file, indent=2)
-
-        print("\n----- Task Definition -----")
-        print(json.dumps(task_definition, indent=2))
-        print("---------------------------\n")
-            
-        print(f"Task definition successfully written to {args.output}")
         
-    except Exception as e:
-        print(f"Error generating task definition: {e}", file=sys.stderr)
+        logger.info(f"Task definition written to {output_path}")
+        
+        # Output for GitHub Actions (to stderr so it doesn't interfere with JSON output)
+        replica_count = config.get('replica_count', '')
+        print(f"::set-output name=replica_count::{replica_count}", file=sys.stderr)
+        
+        # Output JSON to stdout for tests and compatibility
+        print(json.dumps(task_definition, indent=2))
+        
+    except ValidationError as e:
+        logger.error(f"Configuration validation failed: {e}")
         sys.exit(1)
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        if logger.level == logging.DEBUG:
+            logger.exception("Full traceback:")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
