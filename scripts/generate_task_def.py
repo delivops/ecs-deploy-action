@@ -5,6 +5,291 @@ import argparse
 import sys
 import os
 
+def build_init_containers(config, secret_files, cluster_name, app_name, aws_region):
+    """Build init containers for secret file downloads"""
+    container_definitions = []
+    
+    if secret_files:
+        # Join secret names with commas for the environment variable
+        secret_files_env = ",".join(secret_files)
+        
+        init_container = {
+            "name": "init-container-for-secret-files",
+            "image": "amazon/aws-cli",
+            "essential": False,
+            "entryPoint": ["/bin/sh"],
+            "command": [
+                "-c",
+                "for secret in ${SECRET_FILES//,/ }; do "
+                "echo \"Fetching $secret...\"; "
+                "aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretString --output text > /etc/secrets/$secret; "
+                "if [ $? -eq 0 ] && [ -s /etc/secrets/$secret ]; then "
+                "echo \"✅ Successfully saved $secret to /etc/secrets/$secret\"; "
+                "else echo \"❌ Failed to save $secret\" >&2; exit 1; "
+                "fi; "
+                "done"
+            ],
+            "environment": [
+                {
+                    "name": "SECRET_FILES",
+                    "value": secret_files_env
+                },
+                {
+                    "name": "AWS_REGION",
+                    "value": aws_region
+                }
+            ],
+            "mountPoints": [
+                {
+                    "sourceVolume": "shared-volume",
+                    "containerPath": "/etc/secrets"
+                }
+            ],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
+                    "awslogs-region": aws_region,
+                    "awslogs-stream-prefix": "ssm-file-downloader"                
+                    }
+            }
+        }
+        container_definitions.append(init_container)
+    
+    return container_definitions
+
+def build_app_container(config, image_uri, environment, secrets, health, cluster_name, app_name, aws_region, use_fluent_bit, has_secret_files):
+    """Build the main application container"""
+    command = config.get('command', [])
+    entrypoint = config.get('entrypoint', [])
+    
+    app_container = {
+        "name": "app",
+        "image": image_uri,
+        "essential": True,
+        "environment": environment,
+        "command": command,
+        "entryPoint": entrypoint,
+        "secrets": secrets
+    }
+    
+    # Set logConfiguration for app container
+    if use_fluent_bit:
+        app_container["logConfiguration"] = {
+            "logDriver": "awsfirelens",
+            "options": {}
+        }
+    else:
+        app_container["logConfiguration"] = {
+            "logDriver": "awslogs",
+            "options": {
+                "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
+                "awslogs-region": aws_region,
+                "awslogs-stream-prefix": "/default"
+            }
+        }
+    
+    # Only include healthCheck if it was properly built
+    if health:
+        app_container["healthCheck"] = health
+
+    # Handle port configurations with new naming
+    main_port = config.get('port')
+    additional_ports = config.get('additional_ports', [])
+    
+    port_mappings = []
+    
+    # Add main port if specified with default name
+    if main_port:
+        port_mapping = {
+            "name": "default",
+            "containerPort": main_port,
+            "hostPort": main_port,
+            "protocol": "tcp",
+            "appProtocol": "http"
+        }
+        port_mappings.append(port_mapping)
+    
+    # Add additional ports with their specified names
+    for port_info in additional_ports:
+        if isinstance(port_info, dict):
+            # Each item is expected to be a dict with one key-value pair
+            for name, port in port_info.items():
+                port_mapping = {
+                    "name": name,
+                    "containerPort": port,
+                    "hostPort": port,
+                    "protocol": "tcp",
+                    "appProtocol": "http"
+                }
+                port_mappings.append(port_mapping)
+    
+    if port_mappings:
+        app_container["portMappings"] = port_mappings
+    
+    # Add mount points if using shared volume
+    if has_secret_files:
+        app_container["mountPoints"] = [
+            {
+                "sourceVolume": "shared-volume",
+                "containerPath": "/etc/secrets"
+            }
+        ]
+        # Add dependency on init containers
+        app_depends_on = [
+            {
+                "containerName": "init-container-for-secret-files",
+                "condition": "SUCCESS"
+            }
+        ]
+    else:
+        app_depends_on = []
+
+    # If fluent-bit is enabled, add dependsOn for fluent-bit
+    if use_fluent_bit:
+        app_depends_on.append({
+            "containerName": "fluent-bit",
+            "condition": "START"
+        })
+    if app_depends_on:
+        app_container["dependsOn"] = app_depends_on
+    
+    return app_container
+
+def build_fluent_bit_container(config, fluent_bit_image, app_name, cluster_name, aws_region):
+    """Build Fluent Bit sidecar container"""
+    fluent_bit_collector = config.get('fluent_bit_collector', {})
+    config_name = fluent_bit_collector.get('extra_config', "extra.conf")
+    ecs_log_metadata = fluent_bit_collector.get('ecs_log_metadata', 'true')
+    extra_config = f"extra/{config_name}"
+    
+    fluent_bit_container = {
+        "name": "fluent-bit",
+        "image": fluent_bit_image,  # Always ECR-style
+        "essential": True,  # Critical sidecar - if it fails, task should fail
+        "environment": [
+            {"name": "SERVICE_NAME", "value": app_name},
+            {"name": "ENV", "value": cluster_name}
+        ],
+        "healthCheck": {
+            "command": [
+                "CMD-SHELL",
+                "curl -f http://127.0.0.1:2020/api/v1/health || exit 1"
+            ],
+            "interval": 10,
+            "timeout": 5,
+            "retries": 3,
+            "startPeriod": 5
+        },
+        "logConfiguration": {
+            "logDriver": "awslogs",
+            "options": {
+                "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
+                "awslogs-region": aws_region,
+                "awslogs-stream-prefix": "fluentbit"
+            }
+        },
+        "firelensConfiguration": {
+            "type": "fluentbit",
+            "options": {
+                "config-file-type": "file",
+                "config-file-value": extra_config,
+                "enable-ecs-log-metadata": ecs_log_metadata
+            }
+        }
+    }
+    
+    return fluent_bit_container
+
+def build_otel_container(config, otel_collector_image, otel_is_custom_image, otel_collector_ssm, otel_extra_config, otel_metrics_port, otel_metrics_path, app_name, cluster_name, aws_region):
+    """Build OpenTelemetry collector container"""
+    # Build environment variables for OTEL container
+    otel_environment = []
+    
+    # Always add METRICS_PATH (default: /metrics)
+    otel_environment.append({
+        "name": "METRICS_PATH",
+        "value": otel_metrics_path
+    })
+    
+    # Always add METRICS_PORT (default: 8080)
+    otel_environment.append({
+        "name": "METRICS_PORT",
+        "value": str(otel_metrics_port)
+    })
+    
+    # Add SERVICE_NAME if using custom image (not default AWS image)
+    if otel_is_custom_image:
+        otel_environment.append({
+            "name": "SERVICE_NAME",
+            "value": app_name
+        })
+    
+    # Build command based on image type
+    if otel_is_custom_image and otel_extra_config:
+        # Custom image with extra config file
+        otel_command = [
+            "--config",
+            f"/conf/{otel_extra_config}"
+        ]
+    elif otel_is_custom_image:
+        # Custom image without extra config (use default config path)
+        otel_command = [
+            "--config",
+            "/conf/config.yaml"
+        ]
+    else:
+        # Default AWS image - use SSM config
+        otel_command = [
+            "--config",
+            "env:SSM_CONFIG"
+        ]
+    
+    otel_container = {
+        "name": "otel-collector",
+        "image": otel_collector_image,  # Use as-is from YAML or default
+        "portMappings": [
+            {
+                "name": "otel-collector-4317-tcp",
+                "containerPort": 4317,
+                "hostPort": 4317,
+                "protocol": "tcp",
+                "appProtocol": "grpc"
+            },
+            {
+                "name": "otel-collector-4318-tcp",
+                "containerPort": 4318,
+                "hostPort": 4318,
+                "protocol": "tcp"
+            }
+        ],
+        "essential": True,  # Critical sidecar - if it fails, task should fail
+        "command": otel_command,
+        "logConfiguration": {
+            "logDriver": "awslogs",
+            "options": {
+                "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
+                "awslogs-region": aws_region,
+                "awslogs-stream-prefix": "otel-collector"
+            }
+        }
+    }
+    
+    # Add environment variables if any
+    if otel_environment:
+        otel_container["environment"] = otel_environment
+    
+    # Add secrets only for default AWS image
+    if not otel_is_custom_image:
+        otel_container["secrets"] = [
+            {
+                "name": "SSM_CONFIG",
+                "valueFrom": otel_collector_ssm
+            }
+        ]
+    
+    return otel_container
+
 def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=None, container_registry=None, image_name=None, tag=None, service_name=None, public_image=None):
     """
     Generate an ECS task definition from a simplified YAML configuration
@@ -148,279 +433,29 @@ def generate_task_definition(yaml_file_path, cluster_name, aws_region, registry=
         image_uri = f"{image_name_clean}:{tag_clean}"
     
 
-    # Create app container definition
-    app_container = {
-        "name": "app",
-        "image": image_uri,
-        "essential": True,
-        "environment": environment,
-        "command": command,
-        "entryPoint": entrypoint,
-        "secrets": secrets
-    }
-    # Set logConfiguration for app container
-    if use_fluent_bit:
-        app_container["logConfiguration"] = {
-            "logDriver": "awsfirelens",
-            "options": {}
-        }
-    else:
-        app_container["logConfiguration"] = {
-            "logDriver": "awslogs",
-            "options": {
-                "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
-                "awslogs-region": aws_region,
-                "awslogs-stream-prefix": "/default"
-            }
-        }
-    
-        # Only include healthCheck if it was properly built
-    if health:
-        app_container["healthCheck"] = health
 
-    # Handle port configurations with new naming
-    main_port = config.get('port')
-    additional_ports = config.get('additional_ports', [])
-    
-    port_mappings = []
-    
-    # Add main port if specified with default name
-    if main_port:
-        port_mapping = {
-            "name": "default",
-            "containerPort": main_port,
-            "hostPort": main_port,
-            "protocol": "tcp",
-            "appProtocol": "http"
-        }
-        port_mappings.append(port_mapping)
-    
-    # Add additional ports with their specified names
-    for port_info in additional_ports:
-        if isinstance(port_info, dict):
-            # Each item is expected to be a dict with one key-value pair
-            for name, port in port_info.items():
-                port_mapping = {
-                    "name": name,
-                    "containerPort": port,
-                    "hostPort": port,
-                    "protocol": "tcp",
-                    "appProtocol": "http"
-                }
-                port_mappings.append(port_mapping)
-    
-    if port_mappings:
-        app_container["portMappings"] = port_mappings
-    
-    # Add mount points if using shared volume
-    if has_secret_files:
-        app_container["mountPoints"] = [
-            {
-                "sourceVolume": "shared-volume",
-                "containerPath": "/etc/secrets"
-            }
-        ]
-        # Add dependency on init containers
-        app_depends_on = [
-            {
-                "containerName": "init-container-for-secret-files",
-                "condition": "SUCCESS"
-            }
-        ]
-    else:
-        app_depends_on = []
-
-    # If fluent-bit is enabled, add dependsOn for fluent-bit
-    if use_fluent_bit:
-        app_depends_on.append({
-            "containerName": "fluent-bit",
-            "condition": "START"
-        })
-    if app_depends_on:
-        app_container["dependsOn"] = app_depends_on
     
     print(f"Setting container image to: {image_uri}")
     
     # Create the container definitions list
     container_definitions = []
     
-    # Create init container for secret files if needed
-    if has_secret_files:
-        # Join secret names with commas for the environment variable
-        secret_files_env = ",".join(secret_files)
-        
-        init_container = {
-            "name": "init-container-for-secret-files",
-            "image": "amazon/aws-cli",
-            "essential": False,
-            "entryPoint": ["/bin/sh"],
-            "command": [
-                "-c",
-                "for secret in ${SECRET_FILES//,/ }; do "
-                "echo \"Fetching $secret...\"; "
-                "aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretString --output text > /etc/secrets/$secret; "
-                "if [ $? -eq 0 ] && [ -s /etc/secrets/$secret ]; then "
-                "echo \"✅ Successfully saved $secret to /etc/secrets/$secret\"; "
-                "else echo \"❌ Failed to save $secret\" >&2; exit 1; "
-                "fi; "
-                "done"
-            ],
-            "environment": [
-                {
-                    "name": "SECRET_FILES",
-                    "value": secret_files_env
-                },
-                {
-                    "name": "AWS_REGION",
-                    "value": aws_region
-                }
-            ],
-            "mountPoints": [
-                {
-                    "sourceVolume": "shared-volume",
-                    "containerPath": "/etc/secrets"
-                }
-            ],
-            "logConfiguration": {
-                "logDriver": "awslogs",
-                "options": {
-                    "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
-                    "awslogs-region": aws_region,
-                    "awslogs-stream-prefix": "ssm-file-downloader"                
-                    }
-            }
-        }
-        container_definitions.append(init_container)
+    # Create init containers for secret files if needed
+    init_containers = build_init_containers(config, secret_files, cluster_name, app_name, aws_region)
+    container_definitions.extend(init_containers)
 
     # Add the main application container
+    app_container = build_app_container(config, image_uri, environment, secrets, health, cluster_name, app_name, aws_region, use_fluent_bit, has_secret_files)
     container_definitions.append(app_container)
 
     # Add fluent-bit sidecar container if enabled
     if use_fluent_bit:
-        fluent_bit_container = {
-            "name": "fluent-bit",
-            "image": fluent_bit_image,  # Always ECR-style
-            "essential": True,  # Critical sidecar - if it fails, task should fail
-            "environment": [
-                {"name": "SERVICE_NAME", "value": app_name},
-                {"name": "ENV", "value": cluster_name}
-            ],
-            "healthCheck": {
-                "command": [
-                    "CMD-SHELL",
-                    "curl -f http://127.0.0.1:2020/api/v1/health || exit 1"
-                ],
-                "interval": 10,
-                "timeout": 5,
-                "retries": 3,
-                "startPeriod": 5
-            },
-            "logConfiguration": {
-                "logDriver": "awslogs",
-                "options": {
-                    "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
-                    "awslogs-region": aws_region,
-                    "awslogs-stream-prefix": "fluentbit"
-                }
-            },
-            "firelensConfiguration": {
-                "type": "fluentbit",
-                "options": {
-                    "config-file-type": "file",
-                    "config-file-value": extra_config,
-                    "enable-ecs-log-metadata": ecs_log_metadata
-                }
-            }
-        }
+        fluent_bit_container = build_fluent_bit_container(config, fluent_bit_image, app_name, cluster_name, aws_region)
         container_definitions.append(fluent_bit_container)
     
     # Add the OpenTelemetry collector container if enabled (new format)
     if otel_collector_image is not None:
-        # Build environment variables for OTEL container
-        otel_environment = []
-        
-        # Always add METRICS_PATH (default: /metrics)
-        otel_environment.append({
-            "name": "METRICS_PATH",
-            "value": otel_metrics_path
-        })
-        
-        # Always add METRICS_PORT (default: 8080)
-        otel_environment.append({
-            "name": "METRICS_PORT",
-            "value": str(otel_metrics_port)
-        })
-        
-        # Add SERVICE_NAME if using custom image (not default AWS image)
-        if otel_is_custom_image:
-            otel_environment.append({
-                "name": "SERVICE_NAME",
-                "value": app_name
-            })
-        
-        # Build command based on image type
-        if otel_is_custom_image and otel_extra_config:
-            # Custom image with extra config file
-            otel_command = [
-                "--config",
-                f"/conf/{otel_extra_config}"
-            ]
-        elif otel_is_custom_image:
-            # Custom image without extra config (use default config path)
-            otel_command = [
-                "--config",
-                "/conf/config.yaml"
-            ]
-        else:
-            # Default AWS image - use SSM config
-            otel_command = [
-                "--config",
-                "env:SSM_CONFIG"
-            ]
-        
-        otel_container = {
-            "name": "otel-collector",
-            "image": otel_collector_image,  # Use as-is from YAML or default
-            "portMappings": [
-                {
-                    "name": "otel-collector-4317-tcp",
-                    "containerPort": 4317,
-                    "hostPort": 4317,
-                    "protocol": "tcp",
-                    "appProtocol": "grpc"
-                },
-                {
-                    "name": "otel-collector-4318-tcp",
-                    "containerPort": 4318,
-                    "hostPort": 4318,
-                    "protocol": "tcp"
-                }
-            ],
-            "essential": True,  # Critical sidecar - if it fails, task should fail
-            "command": otel_command,
-            "logConfiguration": {
-                "logDriver": "awslogs",
-                "options": {
-                    "awslogs-group": f"/ecs/{cluster_name}/{app_name}",
-                    "awslogs-region": aws_region,
-                    "awslogs-stream-prefix": "otel-collector"
-                }
-            }
-        }
-        
-        # Add environment variables if any
-        if otel_environment:
-            otel_container["environment"] = otel_environment
-        
-        # Add secrets only for default AWS image
-        if not otel_is_custom_image:
-            otel_container["secrets"] = [
-                {
-                    "name": "SSM_CONFIG",
-                    "valueFrom": otel_collector_ssm
-                }
-            ]
-        
+        otel_container = build_otel_container(config, otel_collector_image, otel_is_custom_image, otel_collector_ssm, otel_extra_config, otel_metrics_port, otel_metrics_path, app_name, cluster_name, aws_region)
         container_definitions.append(otel_container)
     
     # Create the complete task definition

@@ -1,0 +1,16 @@
+# High Resource Configuration Test
+# Tests maximum resource allocation scenarios
+name: high-resource-app
+replica_count: 5
+cpu: 4096
+memory: 8192
+cpu_arch: X86_64
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+envs:
+  - JAVA_OPTS: "-Xmx6g -Xms6g"
+  - MAX_CONNECTIONS: "1000"
+  - THREAD_POOL_SIZE: "100"
+port: 8080
+additional_ports:
+  - jmx: 1099
+command: ["java", "-jar", "app.jar"]

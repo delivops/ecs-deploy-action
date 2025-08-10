@@ -1,0 +1,20 @@
+# Environment Variables Only Test
+# Tests configuration with only environment variables (no secrets)
+name: envs-only-app
+replica_count: 2
+cpu: 512
+memory: 1024
+cpu_arch: ARM64
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+envs:
+  - NODE_ENV: development
+  - DEBUG: "true"
+  - LOG_LEVEL: debug
+  - PORT: "8080"
+  - DATABASE_URL: "postgresql://localhost:5432/testdb"
+  - REDIS_URL: "redis://localhost:6379"
+  - API_TIMEOUT: "30000"
+  - MAX_RETRIES: "3"
+port: 8080
+command: ["npm", "start"]
+entrypoint: ["node"]

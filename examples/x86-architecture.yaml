@@ -1,0 +1,12 @@
+# X86_64 Architecture Test
+# Tests X86_64 CPU architecture (different from ARM64 examples)
+name: x86-app
+replica_count: 1
+cpu: 1024
+memory: 2048
+cpu_arch: X86_64
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+envs:
+  - PLATFORM: x86_64
+  - ARCH_TYPE: amd64
+port: 3000

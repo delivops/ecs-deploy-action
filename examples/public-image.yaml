@@ -15,4 +15,4 @@ command: ["hello"]
 entrypoint: ["world"]
 
 
-//run: python3 scripts/generate_task_def.py examples/public-image.yaml my-cluster us-east-1 "" dummy-image dummy-tag
+# run: python3 scripts/generate_task_def.py examples/public-image.yaml my-cluster us-east-1 "" dummy-image dummy-tag

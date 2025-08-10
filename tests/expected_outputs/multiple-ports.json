@@ -1,0 +1,76 @@
+{
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-app:latest",
+      "essential": true,
+      "environment": [
+        {
+          "name": "SERVICE_TYPE",
+          "value": "multi-port"
+        }
+      ],
+      "command": [],
+      "entryPoint": [],
+      "secrets": [],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/test-cluster/test-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "/default"
+        }
+      },
+      "portMappings": [
+        {
+          "name": "default",
+          "containerPort": 8080,
+          "hostPort": 8080,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        },
+        {
+          "name": "grpc",
+          "containerPort": 9090,
+          "hostPort": 9090,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        },
+        {
+          "name": "metrics",
+          "containerPort": 9091,
+          "hostPort": 9091,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        },
+        {
+          "name": "health",
+          "containerPort": 9092,
+          "hostPort": 9092,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        },
+        {
+          "name": "admin",
+          "containerPort": 9093,
+          "hostPort": 9093,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ]
+    }
+  ],
+  "cpu": "512",
+  "memory": "1024",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "family": "test-cluster_test-service",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ]
+}

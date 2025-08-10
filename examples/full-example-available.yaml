@@ -71,7 +71,6 @@ envs:
 # Two ways to define secrets (choose one):
 
 # Method 1: Classic format (still supported)
-=======
 # Secrets from AWS Secrets Manager (injected as environment variables)
 
 secrets:
@@ -91,8 +90,6 @@ secrets:
 #     values:
 #       - STRIPE_API_KEY
 #       - SENDGRID_API_KEY
-
-=======
 
 # Secret files (downloaded to /etc/secrets/ during container startup)
 secret_files:
@@ -163,7 +160,6 @@ otel_collector:
 #   image_name: "grafana/otel-lgtm:latest"
 #   # metrics_port: 8080 (default)
 #   # metrics_path: "/metrics" (default)
-=======
   image_name: "public.ecr.aws/aws-observability/aws-otel-collector:v0.30.0"
 
 

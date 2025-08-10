@@ -1,0 +1,65 @@
+{
+  "containerDefinitions": [
+    {
+      "command": [
+        "hello"
+      ],
+      "entryPoint": [
+        "world"
+      ],
+      "environment": [
+        {
+          "name": "NODE_ENV",
+          "value": "production"
+        },
+        {
+          "name": "API_KEY",
+          "value": "xyz123"
+        }
+      ],
+      "essential": true,
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-app:latest",
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/test-cluster/test-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "/default"
+        }
+      },
+      "name": "app",
+      "portMappings": [
+        {
+          "appProtocol": "http",
+          "containerPort": 8080,
+          "hostPort": 8080,
+          "name": "default",
+          "protocol": "tcp"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "CLIENT_ID",
+          "valueFrom": "arn:aws:secretsmanager::secret:ava-cortex-analyst-production-IhUQht:CLIENT_ID::"
+        },
+        {
+          "name": "CLIENT_NAME",
+          "valueFrom": "arn:aws:secretsmanager::secret:ava-cortex-analyst-production-IhUQht:CLIENT_NAME::"
+        }
+      ]
+    }
+  ],
+  "cpu": "512",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "family": "test-cluster_test-service",
+  "memory": "1024",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "runtimePlatform": {
+    "cpuArchitecture": "ARM64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole"
+}

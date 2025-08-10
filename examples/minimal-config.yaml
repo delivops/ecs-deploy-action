@@ -1,0 +1,7 @@
+# Minimal Configuration Test
+# Tests the absolute minimum required configuration
+name: minimal-app
+replica_count: 1
+cpu: 256
+memory: 512
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole

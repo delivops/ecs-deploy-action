@@ -1,0 +1,16 @@
+# Custom OTEL Collector with Custom Config Test
+# Tests OTEL collector with custom image and configuration
+name: custom-otel-app
+replica_count: 1
+cpu: 512
+memory: 1024
+cpu_arch: X86_64
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+envs:
+  - SERVICE_NAME: custom-otel-service
+port: 8080
+otel_collector:
+  image_name: "my-custom-otel:v1.2.3"
+  ssm_name: "custom-otel-config"
+  metrics_port: 8888
+  metrics_path: "/custom-metrics"

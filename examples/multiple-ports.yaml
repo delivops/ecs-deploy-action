@@ -1,0 +1,16 @@
+# Multiple Additional Ports Test
+# Tests configuration with multiple additional ports
+name: multi-port-app
+replica_count: 1
+cpu: 512
+memory: 1024
+cpu_arch: X86_64
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+envs:
+  - SERVICE_TYPE: multi-port
+port: 8080
+additional_ports:
+  - grpc: 9090
+  - metrics: 9091
+  - health: 9092
+  - admin: 9093

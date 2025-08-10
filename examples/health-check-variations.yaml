@@ -1,0 +1,17 @@
+# Health Check Variations Test
+# Tests different health check configurations
+name: health-check-app
+replica_count: 1
+cpu: 512
+memory: 1024
+cpu_arch: X86_64
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+port: 8080
+envs:
+  - APP_TYPE: web-service
+health_check:
+  command: "wget --quiet --tries=1 --spider http://localhost:8080/health || exit 1"
+  interval: 60
+  timeout: 10
+  retries: 5
+  start_period: 120

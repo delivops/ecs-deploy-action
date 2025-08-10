@@ -1,0 +1,100 @@
+{
+  "containerDefinitions": [
+    {
+      "command": [],
+      "entryPoint": [],
+      "environment": [
+        {
+          "name": "NODE_ENV",
+          "value": "production"
+        },
+        {
+          "name": "API_VERSION",
+          "value": "v1"
+        }
+      ],
+      "essential": true,
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-app:latest",
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/test-cluster/test-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "/default"
+        }
+      },
+      "name": "app",
+      "portMappings": [
+        {
+          "appProtocol": "http",
+          "containerPort": 8080,
+          "hostPort": 8080,
+          "name": "default",
+          "protocol": "tcp"
+        }
+      ],
+      "secrets": []
+    },
+    {
+      "command": [
+        "--config",
+        "env:SSM_CONFIG"
+      ],
+      "environment": [
+        {
+          "name": "METRICS_PATH",
+          "value": "/metrics"
+        },
+        {
+          "name": "METRICS_PORT",
+          "value": "8080"
+        }
+      ],
+      "essential": true,
+      "image": "public.ecr.aws/aws-observability/aws-otel-collector:latest",
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/test-cluster/test-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "otel-collector"
+        }
+      },
+      "name": "otel-collector",
+      "portMappings": [
+        {
+          "appProtocol": "grpc",
+          "containerPort": 4317,
+          "hostPort": 4317,
+          "name": "otel-collector-4317-tcp",
+          "protocol": "tcp"
+        },
+        {
+          "containerPort": 4318,
+          "hostPort": 4318,
+          "name": "otel-collector-4318-tcp",
+          "protocol": "tcp"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "SSM_CONFIG",
+          "valueFrom": "my-ssm"
+        }
+      ]
+    }
+  ],
+  "cpu": "512",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "family": "test-cluster_test-service",
+  "memory": "1024",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole"
+}
