@@ -2,22 +2,11 @@
 
 # ECS Deploy Action
 
-This GitHub Action deploys applications to Amazon ECS using a simple YAML configuration. The documentation below is fully dynamic and always up-to-date.
-
 This GitHub Action deploys applications to Amazon ECS using a simple YAML configuration.
 
 **All full examples, advanced features, and explanations are in the [`docs/`](docs/) directory.**
 
 Below you’ll find the dynamic, always up-to-date configuration and generated ECS task definition.
-          image_name: my-app
-          tag: ${{ github.sha }}
-          task_config_yaml: apps/my-service/.aws/production.yaml
-          ecs_cluster: ${{ vars.ECS_CLUSTER }}
-          aws_region: ${{ vars.AWS_REGION }}
-          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
-          aws_role: github_services # optional, defaults to 'github_services'
-          dry_run: false # optional, defaults to false
-          ecr_registry: true # optional, defaults to true
 ```
 
 ## YAML Configuration Format
