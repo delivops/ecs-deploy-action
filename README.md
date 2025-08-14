@@ -558,63 +558,79 @@ If you need to modify the task definition generation, edit the Python script at 
 
 ## 📋 Complete YAML Configuration Example
 
+## 📋 Complete YAML Configuration Example
+
+## 📋 Complete YAML Configuration Example
+
+## 📋 Complete YAML Configuration Example
+
+## 📋 Complete YAML Configuration Example
+
+## 📋 Complete YAML Configuration Example
+
 <!-- AUTO-GENERATED-YAML-START -->
 ```yaml
-replica_count: 3
-cpu: 1024
-memory: 2048
-cpu_arch: X86_64
-role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
-port: 8080
 additional_ports:
 - metrics: 9090
 - health: 8081
-- admin: 8082
 command:
 - npm
 - start
+cpu: 1024
+cpu_arch: X86_64
 entrypoint:
 - /usr/local/bin/docker-entrypoint.sh
+envs:
+- NODE_ENV: production
+- API_VERSION: v1
+- LOG_LEVEL: info
+- MAX_CONNECTIONS: 100
+- ENABLE_METRICS: true
+fluent_bit_collector:
+  image_name: fluent-bit:2.1.0
+  extra_config: custom-fluent-bit.conf
+  ecs_log_metadata: 'true'
 health_check:
   command: curl -f http://localhost:8080/health || exit 1
   interval: 30
   timeout: 5
   retries: 3
   start_period: 60
-envs:
-- NODE_ENV: production
-- API_VERSION: v1
-- LOG_LEVEL: info
-- MAX_CONNECTIONS: 100
-- TIMEOUT_SECONDS: 30
-- ENABLE_METRICS: true
-- DEBUG_MODE: false
+memory: 2048
+otel_collector:
+  image_name: my-custom-otel-collector:v1.0.0
+  extra_config: otel-config.yaml
+  ssm_name: my-app-otel-config.yaml
+  metrics_port: 8888
+  metrics_path: /metrics
+port: 8080
+replica_count: 3
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+secret_files:
+- ssl-certificate
+- private-key
+- config-file
+secrets:
+- DATABASE_PASSWORD: arn:aws:secretsmanager:us-east-1:123456789012:secret:db-password
+- API_KEY: arn:aws:secretsmanager:us-east-1:123456789012:secret:api-key
 secrets_envs:
 - id: arn:aws:secretsmanager:us-east-1:123456789012:secret:app-secrets-abc123
   values:
   - DATABASE_PASSWORD
   - API_KEY
   - JWT_SECRET
-- id: arn:aws:secretsmanager:us-east-1:123456789012:secret:external-services-def456
-  values:
-  - STRIPE_API_KEY
-  - SENDGRID_API_KEY
-secret_files:
-- ssl-certificate
-- private-key
-- config-file
-fluent_bit_collector:
-  image_name: fluent-bit:2.1.0
-  extra_config: custom-fluent-bit.conf
-  ecs_log_metadata: 'true'
-otel_collector:
-  image_name: my-custom-otel-collector:v1.0.0
-  extra_config: otel-config.yaml
-  ssm_name: my-app-otel-config.yaml
-  metrics_port: 8888
-  metrics_path: /custom/metrics
 ```
 <!-- AUTO-GENERATED-YAML-END -->
+
+## 🔧 Generated Task Definition
+
+## 🔧 Generated Task Definition
+
+## 🔧 Generated Task Definition
+
+## 🔧 Generated Task Definition
+
+## 🔧 Generated Task Definition
 
 ## 🔧 Generated Task Definition
 
@@ -682,16 +698,8 @@ otel_collector:
           "value": "100"
         },
         {
-          "name": "TIMEOUT_SECONDS",
-          "value": "30"
-        },
-        {
           "name": "ENABLE_METRICS",
           "value": "True"
-        },
-        {
-          "name": "DEBUG_MODE",
-          "value": "False"
         }
       ],
       "command": [
@@ -704,23 +712,11 @@ otel_collector:
       "secrets": [
         {
           "name": "DATABASE_PASSWORD",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:app-secrets-abc123:DATABASE_PASSWORD::"
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:db-password:DATABASE_PASSWORD::"
         },
         {
           "name": "API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:app-secrets-abc123:API_KEY::"
-        },
-        {
-          "name": "JWT_SECRET",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:app-secrets-abc123:JWT_SECRET::"
-        },
-        {
-          "name": "STRIPE_API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:external-services-def456:STRIPE_API_KEY::"
-        },
-        {
-          "name": "SENDGRID_API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:external-services-def456:SENDGRID_API_KEY::"
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:api-key:API_KEY::"
         }
       ],
       "logConfiguration": {
@@ -756,13 +752,6 @@ otel_collector:
           "name": "health",
           "containerPort": 8081,
           "hostPort": 8081,
-          "protocol": "tcp",
-          "appProtocol": "http"
-        },
-        {
-          "name": "admin",
-          "containerPort": 8082,
-          "hostPort": 8082,
           "protocol": "tcp",
           "appProtocol": "http"
         }
@@ -859,7 +848,7 @@ otel_collector:
       "environment": [
         {
           "name": "METRICS_PATH",
-          "value": "/custom/metrics"
+          "value": "/metrics"
         },
         {
           "name": "METRICS_PORT",
