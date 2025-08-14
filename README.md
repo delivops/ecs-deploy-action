@@ -21,65 +21,33 @@ envs:
 - NODE_ENV: production
 - API_VERSION: v1
 - LOG_LEVEL: info
-- MAX_CONNECTIONS: 100
-- ENABLE_METRICS: true
-fluent_bit_collector:
-  image_name: fluent-bit:2.1.0
-  extra_config: custom-fluent-bit.conf
-  ecs_log_metadata: 'true'
-health_check:
-  command: curl -f http://localhost:8080/health || exit 1
-  interval: 30
-  timeout: 5
-  retries: 3
-  start_period: 60
-memory: 2048
-otel_collector:
-  image_name: my-custom-otel-collector:v1.0.0
-  extra_config: otel-config.yaml
-  ssm_name: my-app-otel-config.yaml
-  metrics_port: 8888
-  metrics_path: /metrics
-port: 8080
-replica_count: 3
-role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
-secret_files:
-- ssl-certificate
-- private-key
-- config-file
-secrets:
-- DATABASE_PASSWORD: arn:aws:secretsmanager:us-east-1:123456789012:secret:db-password
-- API_KEY: arn:aws:secretsmanager:us-east-1:123456789012:secret:api-key
-secrets_envs:
-- id: arn:aws:secretsmanager:us-east-1:123456789012:secret:app-secrets-abc123
-  values:
-  - DATABASE_PASSWORD
-  - API_KEY
-  - JWT_SECRET
+
+# ECS Deploy Action
+This GitHub Action deploys applications to Amazon ECS using a simple YAML configuration. It generates a full ECS task definition from a user-provided YAML file.
+
+All full examples, advanced features, and explanations are in the [`docs/`](docs/) directory.
+
+## 🚀 Example Usage (action.yml)
+```yaml
+name: Deploy to ECS
+on:
+  push:
+    branches:
+      - main
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: ECS Deploy Action
+        uses: delivops/ecs-deploy-action@v1
+        with:
+          config: .github/ecs-config.yaml
+          aws-region: us-east-1
+          cluster-name: production-cluster
+          service-name: my-service
 ```
 
-## 🔧 Generated Task Definition
-
-```json
-{
-  "containerDefinitions": [
-    {
-      "name": "init-container-for-secret-files",
-      "image": "amazon/aws-cli",
-      "essential": false,
-      "entryPoint": ["/bin/sh"],
-      "command": [
-        "-c",
-        "for secret in ${SECRET_FILES//,/ }; do echo \"Fetching $secret...\"; aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretString --output text > /etc/secrets/$secret; if [ $? -eq 0 ] && [ -s /etc/secrets/$secret ]; then echo \"\u2705 Successfully saved $secret to /etc/secrets/$secret\"; else echo \"\u274c Failed to save $secret\" >&2; exit 1; fi; done"
-      ],
-      "environment": [
-        {
-          "name": "SECRET_FILES",
-          "value": "ssl-certificate,private-key,config-file"
-        },
-        {
-          "name": "AWS_REGION",
-          "value": "us-east-1"
         }
       ],
       "mountPoints": [
