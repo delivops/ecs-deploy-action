@@ -2,11 +2,15 @@
 
 The `examples/` directory contains a variety of YAML configurations demonstrating all supported features. Each example is self-contained and can be used as a template for your own ECS deployments.
 
-- `full-example-available.yaml`: Comprehensive example with all options
-- `otel-custom-image.yaml`: Custom OpenTelemetry collector setup
-- `otel-default-image.yaml`: Default AWS OTEL collector setup
-- `private-dkr-image.yaml`: Private Docker registry configuration
-- `public-image.yaml`: Public Docker image configuration
-- ...and more
+## Feature Example Index
 
-For details on each example, see the comments in the YAML files.
+- [Basic Usage](basic/README.md)
+- [Environment Variables](envs/README.md)
+- [Secrets and Secret Files](secrets/README.md)
+- [Port Configuration](ports/README.md)
+- [Health Checks](health-check/README.md)
+- [CPU, Memory, Architecture](architecture/README.md)
+- [Fluent Bit Log Collector](fluent-bit/README.md)
+- [OpenTelemetry Collector](otel/README.md)
+
+For details on each example, see the comments in the YAML files in `examples/`.

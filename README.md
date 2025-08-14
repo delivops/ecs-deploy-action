@@ -1,44 +1,10 @@
-[![DelivOps banner](https://raw.githubusercontent.com/delivops/.github/main/images/banner.png?raw=true)](https://delivops.com)
+![DelivOps banner](https://raw.githubusercontent.com/delivops/.github/main/images/banner.png?raw=true)
 
 # ECS Deploy Action
 
-This GitHub composite action simplifies deploying applications to Amazon ECS by generating a task definition from a simple YAML configuration and handling the deployment process.
+This GitHub Action deploys applications to Amazon ECS using a simple YAML configuration. The documentation below is fully dynamic and always up-to-date.
 
-## Features
-
-- Generates ECS task definitions from simplified YAML configurations
-- Supports OpenTelemetry collector sidecars with custom or default AWS images
-- Supports Fluent Bit log collector sidecars for advanced log routing
-- Configures proper logging with CloudWatch or Fluent Bit
-- Supports custom CPU and memory allocations with ARM64/X86_64 architectures
-- Supports health checks and custom port configurations
-- Handles both ECR and public Docker registries
-- Supports dry-run mode for testing
-- Verifies successful deployments
-
-## Usage
-
-### In Your Workflow
-
-```yaml
-name: Deploy Application
-on:
-  push:
-    branches:
-      - main
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      # Build and tag your image here
-
-      - name: Deploy to ECS
-        uses: delivops/ecs-deploy-action@main
-        with:
-          environment: production
-          ecs_service: my-service
+For feature explanations, example walkthroughs, and advanced usage, see the [docs/](docs/) directory.
           image_name: my-app
           tag: ${{ github.sha }}
           task_config_yaml: apps/my-service/.aws/production.yaml
