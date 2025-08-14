@@ -18,5 +18,5 @@ Add Fluent Bit as a sidecar for advanced log routing.
 fluent_bit_collector:
   image_name: fluent-bit:2.1.0
   extra_config: custom-fluent-bit.conf
-  ecs_log_metadata: 'true'
+  ecs_log_metadata: "true"
 ```
