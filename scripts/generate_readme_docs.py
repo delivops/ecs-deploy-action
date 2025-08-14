@@ -244,37 +244,36 @@ def update_readme():
     # Generate full YAML example
     full_example = create_full_example_yaml()
     yaml_content = yaml_to_clean_string(full_example)
-    
+
     # Generate corresponding task definition
     task_definition_json = generate_task_definition(yaml_content)
-    
+
     # Read current README
     readme_path = 'README.md'
     with open(readme_path, 'r') as f:
         readme_content = f.read()
-    
 
-    # Define the sections to replace (no duplicate headings)
-    yaml_section = f"## 📋 Complete YAML Configuration Example\n<!-- AUTO-GENERATED-YAML-START -->\n```yaml\n{yaml_content.strip()}\n```\n<!-- AUTO-GENERATED-YAML-END -->"
+    # Define dynamic section markers
+    start_marker = '<start dynamic>'
+    end_marker = '<end dynamic>'
 
-    task_def_section = f"## 🔧 Generated Task Definition\n<!-- AUTO-GENERATED-TASK-DEF-START -->\n```json\n{task_definition_json.strip()}\n```\n<!-- AUTO-GENERATED-TASK-DEF-END -->"
-    
-    # Replace or add sections
-    readme_content = replace_section(readme_content, 
-                                   '<!-- AUTO-GENERATED-YAML-START -->', 
-                                   '<!-- AUTO-GENERATED-YAML-END -->', 
-                                   yaml_section)
-    
-    readme_content = replace_section(readme_content, 
-                                   '<!-- AUTO-GENERATED-TASK-DEF-START -->', 
-                                   '<!-- AUTO-GENERATED-TASK-DEF-END -->', 
-                                   task_def_section)
-    
+    # Prepare dynamic content
+    dynamic_content = f"## 📋 Complete YAML Configuration Example\n```yaml\n{yaml_content.strip()}\n```\n\n## 🔧 Generated Task Definition\n```json\n{task_definition_json.strip()}\n```"
+
+    # Replace content between markers
+    start_idx = readme_content.find(start_marker)
+    end_idx = readme_content.find(end_marker)
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        new_readme = readme_content[:start_idx + len(start_marker)] + '\n' + dynamic_content + '\n' + readme_content[end_idx:]
+    else:
+        # If markers not found, append them at the end
+        new_readme = readme_content.strip() + f"\n\n{start_marker}\n{dynamic_content}\n{end_marker}\n"
+
     # Write updated README
     with open(readme_path, 'w') as f:
-        f.write(readme_content)
-    
-    print("✅ README updated with latest examples and task definition")
+        f.write(new_readme)
+
+    print("✅ README updated with latest dynamic section")
 
 def replace_section(content, start_marker, end_marker, new_section):
     """Replace content between markers, or append if markers don't exist."""
