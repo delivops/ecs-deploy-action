@@ -556,6 +556,8 @@ If you need to modify the task definition generation, edit the Python script at 
 
 ## 📋 Complete YAML Configuration Example
 
+## 📋 Complete YAML Configuration Example
+
 <!-- AUTO-GENERATED-YAML-START -->
 ```yaml
 replica_count: 3
@@ -613,6 +615,8 @@ otel_collector:
   metrics_path: /custom/metrics
 ```
 <!-- AUTO-GENERATED-YAML-END -->
+
+## 🔧 Generated Task Definition
 
 ## 🔧 Generated Task Definition
 
