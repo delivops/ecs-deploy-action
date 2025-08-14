@@ -53,105 +53,161 @@ jobs:
 This section provides a comprehensive reference for all available configuration options and their usage.
 
 <start dynamic>
-
-### Complete YAML Configuration
-
+## 📋 Complete YAML Configuration Example
 ```yaml
-# Example of a complete YAML configuration with all available options
-service_name: my-service  # Required: Name of the ECS service
-cluster_name: my-cluster  # Required: Name of the ECS cluster
-
-# Container configuration
-container_name: app       # Name of the main container
-cpu: 1024                 # CPU units (256, 512, 1024, 2048, 4096)
-memory: 2048              # Memory in MB
-cpu_arch: X86_64          # CPU architecture (X86_64 or ARM64)
-
-# Image configuration
-image: nginx:latest       # Container image
-port: 80                  # Main container port
-additional_ports:         # Additional container ports
-  - metrics: 9090
-  - debug: 4000
-
-# Environment variables
+additional_ports:
+- metrics: 9090
+- health: 8081
+command:
+- npm
+- start
+cpu: 1024
+cpu_arch: X86_64
+entrypoint:
+- /usr/local/bin/docker-entrypoint.sh
 envs:
-  - NODE_ENV: production
-  - LOG_LEVEL: info
-  - API_URL: https://api.example.com
-
-# Secrets configuration (legacy format)
-secrets:
-  - DB_PASSWORD: arn:aws:secretsmanager:region:account:secret:db-password
-  - API_KEY: arn:aws:secretsmanager:region:account:secret:api-key
-
-# OR use the new grouped secrets format
-secrets_envs:
-  - id: arn:aws:secretsmanager:region:account:secret:app-secrets
-    values: [DB_PASSWORD, API_KEY, JWT_SECRET]
-
-# Health check configuration
+- NODE_ENV: production
+- API_VERSION: v1
+- LOG_LEVEL: info
+- MAX_CONNECTIONS: 100
+- ENABLE_METRICS: true
+fluent_bit_collector:
+  image_name: fluent-bit:2.1.0
+  extra_config: custom-fluent-bit.conf
+  ecs_log_metadata: 'true'
 health_check:
-  command: ["CMD-SHELL", "curl -f http://localhost/health || exit 1"]
+  command: curl -f http://localhost:8080/health || exit 1
   interval: 30
   timeout: 5
   retries: 3
   start_period: 60
-
-# OpenTelemetry configuration (optional)
+memory: 2048
 otel_collector:
-  enabled: true
-  image_name: public.ecr.aws/aws-observability/aws-otel-collector:latest
+  image_name: my-custom-otel-collector:v1.0.0
+  extra_config: otel-config.yaml
+  ssm_name: my-app-otel-config.yaml
   metrics_port: 8888
   metrics_path: /metrics
-  extra_config: config/otel-config.yaml  # Path to custom config
-  ssm_name: /app/otel-config             # SSM parameter for config
-
-# Fluent Bit configuration (optional)
-fluent_bit_collector:
-  enabled: true
-  image_name: public.ecr.aws/aws-observability/aws-for-fluent-bit:latest
-  extra_config: config/fluent-bit.conf
-  ecs_log_metadata: true
-
-# Task execution role
+port: 8080
+replica_count: 3
 role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
-
-# Task definition overrides
-task_definition:
-  networkMode: awsvpc
-  requiresCompatibilities: ["FARGATE"]
-  executionRoleArn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
-  volumes:
-    - name: app-storage
-      efsVolumeConfiguration:
-        fileSystemId: fs-12345678
-        transitEncryption: ENABLED
+secret_files:
+- ssl-certificate
+- private-key
+- config-file
+secrets:
+- DATABASE_PASSWORD: arn:aws:secretsmanager:us-east-1:123456789012:secret:db-password
+- API_KEY: arn:aws:secretsmanager:us-east-1:123456789012:secret:api-key
+secrets_envs:
+- id: arn:aws:secretsmanager:us-east-1:123456789012:secret:app-secrets-abc123
+  values:
+  - DATABASE_PASSWORD
+  - API_KEY
+  - JWT_SECRET
 ```
 
-### Generated JSON Task Definition
-
-When processed by the Python script, the above YAML generates the following ECS task definition:
-
+## 🔧 Generated Task Definition
 ```json
 {
-  "family": "my-service",
-  "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
-  "cpu": "1024",
-  "memory": "2048",
-  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
   "containerDefinitions": [
     {
+      "name": "init-container-for-secret-files",
+      "image": "amazon/aws-cli",
+      "essential": false,
+      "entryPoint": [
+        "/bin/sh"
+      ],
+      "command": [
+        "-c",
+        "for secret in ${SECRET_FILES//,/ }; do echo \"Fetching $secret...\"; aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretString --output text > /etc/secrets/$secret; if [ $? -eq 0 ] && [ -s /etc/secrets/$secret ]; then echo \"\u2705 Successfully saved $secret to /etc/secrets/$secret\"; else echo \"\u274c Failed to save $secret\" >&2; exit 1; fi; done"
+      ],
+      "environment": [
+        {
+          "name": "SECRET_FILES",
+          "value": "ssl-certificate,private-key,config-file"
+        },
+        {
+          "name": "AWS_REGION",
+          "value": "us-east-1"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "shared-volume",
+          "containerPath": "/etc/secrets"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/production-cluster/my-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ssm-file-downloader"
+        }
+      }
+    },
+    {
       "name": "app",
-      "image": "nginx:latest",
-      "cpu": 1024,
-      "memory": 2048,
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/my-awesome-app:latest",
+      "essential": true,
+      "environment": [
+        {
+          "name": "NODE_ENV",
+          "value": "production"
+        },
+        {
+          "name": "API_VERSION",
+          "value": "v1"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "value": "info"
+        },
+        {
+          "name": "MAX_CONNECTIONS",
+          "value": "100"
+        },
+        {
+          "name": "ENABLE_METRICS",
+          "value": "True"
+        }
+      ],
+      "command": [
+        "npm",
+        "start"
+      ],
+      "entryPoint": [
+        "/usr/local/bin/docker-entrypoint.sh"
+      ],
+      "secrets": [
+        {
+          "name": "DATABASE_PASSWORD",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:db-password:DATABASE_PASSWORD::"
+        },
+        {
+          "name": "API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:api-key:API_KEY::"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awsfirelens",
+        "options": {}
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "curl -f http://localhost:8080/health || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      },
       "portMappings": [
         {
           "name": "default",
-          "containerPort": 80,
-          "hostPort": 80,
+          "containerPort": 8080,
+          "hostPort": 8080,
           "protocol": "tcp",
           "appProtocol": "http"
         },
@@ -163,96 +219,139 @@ When processed by the Python script, the above YAML generates the following ECS 
           "appProtocol": "http"
         },
         {
-          "name": "debug",
-          "containerPort": 4000,
-          "hostPort": 4000,
+          "name": "health",
+          "containerPort": 8081,
+          "hostPort": 8081,
           "protocol": "tcp",
           "appProtocol": "http"
         }
       ],
-      "essential": true,
-      "environment": [
-        {"name": "NODE_ENV", "value": "production"},
-        {"name": "LOG_LEVEL", "value": "info"},
-        {"name": "API_URL", "value": "https://api.example.com"}
-      ],
-      "secrets": [
+      "mountPoints": [
         {
-          "name": "DB_PASSWORD",
-          "valueFrom": "arn:aws:secretsmanager:region:account:secret:db-password:DB_PASSWORD::"
+          "sourceVolume": "shared-volume",
+          "containerPath": "/etc/secrets"
+        }
+      ],
+      "dependsOn": [
+        {
+          "containerName": "init-container-for-secret-files",
+          "condition": "SUCCESS"
         },
         {
-          "name": "API_KEY",
-          "valueFrom": "arn:aws:secretsmanager:region:account:secret:api-key:API_KEY::"
+          "containerName": "fluent-bit",
+          "condition": "START"
         }
-      ],
-      "logConfiguration": {
-        "logDriver": "awslogs",
-        "options": {
-          "awslogs-group": "/ecs/my-cluster/my-service",
-          "awslogs-region": "us-east-1",
-          "awslogs-stream-prefix": "/default"
-        }
-      },
-      "healthCheck": {
-        "command": ["CMD-SHELL", "curl -f http://localhost/health || exit 1"],
-        "interval": 30,
-        "timeout": 5,
-        "retries": 3,
-        "startPeriod": 60
-      }
-    },
-    {
-      "name": "aws-otel-collector",
-      "image": "public.ecr.aws/aws-observability/aws-otel-collector:latest",
-      "essential": true,
-      "command": [
-        "--config=/etc/ecs/ecs-default-config.yaml"
-      ],
-      "portMappings": [
-        {
-          "containerPort": 8888,
-          "protocol": "tcp"
-        }
-      ],
-      "logConfiguration": {
-        "logDriver": "awslogs",
-        "options": {
-          "awslogs-group": "/ecs/my-cluster/my-service",
-          "awslogs-region": "us-east-1",
-          "awslogs-stream-prefix": "otel"
-        }
-      }
+      ]
     },
     {
       "name": "fluent-bit",
-      "image": "public.ecr.aws/aws-observability/aws-for-fluent-bit:latest",
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/fluent-bit:2.1.0",
       "essential": true,
-      "firelensConfiguration": {
-        "type": "fluentbit"
+      "environment": [
+        {
+          "name": "SERVICE_NAME",
+          "value": "my-service"
+        },
+        {
+          "name": "ENV",
+          "value": "production-cluster"
+        }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "curl -f http://127.0.0.1:2020/api/v1/health || exit 1"
+        ],
+        "interval": 10,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 5
       },
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
-          "awslogs-group": "/ecs/my-cluster/my-service",
+          "awslogs-group": "/ecs/production-cluster/my-service",
           "awslogs-region": "us-east-1",
-          "awslogs-stream-prefix": "fluent-bit"
+          "awslogs-stream-prefix": "fluentbit"
+        }
+      },
+      "firelensConfiguration": {
+        "type": "fluentbit",
+        "options": {
+          "config-file-type": "file",
+          "config-file-value": "extra/custom-fluent-bit.conf",
+          "enable-ecs-log-metadata": "true"
         }
       }
+    },
+    {
+      "name": "otel-collector",
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/my-custom-otel-collector:v1.0.0",
+      "portMappings": [
+        {
+          "name": "otel-collector-4317-tcp",
+          "containerPort": 4317,
+          "hostPort": 4317,
+          "protocol": "tcp",
+          "appProtocol": "grpc"
+        },
+        {
+          "name": "otel-collector-4318-tcp",
+          "containerPort": 4318,
+          "hostPort": 4318,
+          "protocol": "tcp"
+        }
+      ],
+      "essential": true,
+      "command": [
+        "--config",
+        "/conf/otel-config.yaml"
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/production-cluster/my-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "otel-collector"
+        }
+      },
+      "environment": [
+        {
+          "name": "METRICS_PATH",
+          "value": "/metrics"
+        },
+        {
+          "name": "METRICS_PORT",
+          "value": "8888"
+        },
+        {
+          "name": "SERVICE_NAME",
+          "value": "my-service"
+        }
+      ]
     }
+  ],
+  "cpu": "1024",
+  "memory": "2048",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "family": "production-cluster_my-service",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
   ],
   "volumes": [
     {
-      "name": "app-storage",
-      "efsVolumeConfiguration": {
-        "fileSystemId": "fs-12345678",
-        "transitEncryption": "ENABLED"
-      }
+      "name": "shared-volume",
+      "host": {}
     }
   ]
 }
 ```
-
 <end dynamic>
 
 ## Getting Started
