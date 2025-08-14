@@ -253,22 +253,11 @@ def update_readme():
     with open(readme_path, 'r') as f:
         readme_content = f.read()
     
-    # Define the sections to replace
-    yaml_section = f"""## 📋 Complete YAML Configuration Example
 
-<!-- AUTO-GENERATED-YAML-START -->
-```yaml
-{yaml_content.strip()}
-```
-<!-- AUTO-GENERATED-YAML-END -->"""
+    # Define the sections to replace (no duplicate headings)
+    yaml_section = f"## 📋 Complete YAML Configuration Example\n<!-- AUTO-GENERATED-YAML-START -->\n```yaml\n{yaml_content.strip()}\n```\n<!-- AUTO-GENERATED-YAML-END -->"
 
-    task_def_section = f"""## 🔧 Generated Task Definition
-
-<!-- AUTO-GENERATED-TASK-DEF-START -->
-```json
-{task_definition_json.strip()}
-```
-<!-- AUTO-GENERATED-TASK-DEF-END -->"""
+    task_def_section = f"## 🔧 Generated Task Definition\n<!-- AUTO-GENERATED-TASK-DEF-START -->\n```json\n{task_definition_json.strip()}\n```\n<!-- AUTO-GENERATED-TASK-DEF-END -->"
     
     # Replace or add sections
     readme_content = replace_section(readme_content, 
@@ -291,7 +280,24 @@ def replace_section(content, start_marker, end_marker, new_section):
     """Replace content between markers, or append if markers don't exist."""
     start_idx = content.find(start_marker)
     end_idx = content.find(end_marker)
-    
+
+    # Remove duplicate headings before the marker
+    def remove_heading_before_marker(text, heading, marker):
+        idx = text.find(marker)
+        if idx == -1:
+            return text
+        # Find heading before marker
+        heading_idx = text.rfind(heading, 0, idx)
+        if heading_idx != -1 and heading_idx + len(heading) == idx:
+            # Remove heading
+            text = text[:heading_idx] + text[idx:]
+        return text
+
+    if start_marker == '<!-- AUTO-GENERATED-YAML-START -->':
+        content = remove_heading_before_marker(content, '## 📋 Complete YAML Configuration Example\n', start_marker)
+    if start_marker == '<!-- AUTO-GENERATED-TASK-DEF-START -->':
+        content = remove_heading_before_marker(content, '## 🔧 Generated Task Definition\n', start_marker)
+
     if start_idx != -1 and end_idx != -1:
         # Replace existing section
         end_idx += len(end_marker)
