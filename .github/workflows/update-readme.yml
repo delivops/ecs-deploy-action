@@ -4,15 +4,15 @@ on:
   push:
     branches: [main]
     paths:
-      - 'scripts/**'
-      - 'examples/**'
-      - 'action.yml'
+      - "scripts/**"
+      - "examples/**"
+      - "action.yml"
   pull_request:
     branches: [main]
     paths:
-      - 'scripts/**'
-      - 'examples/**'
-      - 'action.yml'
+      - "scripts/**"
+      - "examples/**"
+      - "action.yml"
 
 permissions:
   contents: write
@@ -31,7 +31,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: "3.9"
 
       - name: Install dependencies
         run: |
@@ -67,7 +67,7 @@ jobs:
           script: |
             const fs = require('fs');
             const readmeContent = fs.readFileSync('README.md', 'utf8');
-            
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,

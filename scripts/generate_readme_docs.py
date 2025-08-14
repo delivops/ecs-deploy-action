@@ -244,54 +244,59 @@ def update_readme():
     # Generate full YAML example
     full_example = create_full_example_yaml()
     yaml_content = yaml_to_clean_string(full_example)
-    
+
     # Generate corresponding task definition
     task_definition_json = generate_task_definition(yaml_content)
-    
+
     # Read current README
     readme_path = 'README.md'
     with open(readme_path, 'r') as f:
         readme_content = f.read()
-    
-    # Define the sections to replace
-    yaml_section = f"""## 📋 Complete YAML Configuration Example
 
-<!-- AUTO-GENERATED-YAML-START -->
-```yaml
-{yaml_content.strip()}
-```
-<!-- AUTO-GENERATED-YAML-END -->"""
+    # Define dynamic section markers
+    start_marker = '<start dynamic>'
+    end_marker = '<end dynamic>'
 
-    task_def_section = f"""## 🔧 Generated Task Definition
+    # Prepare dynamic content
+    dynamic_content = f"## 📋 Complete YAML Configuration Example\n```yaml\n{yaml_content.strip()}\n```\n\n## 🔧 Generated Task Definition\n```json\n{task_definition_json.strip()}\n```"
 
-<!-- AUTO-GENERATED-TASK-DEF-START -->
-```json
-{task_definition_json.strip()}
-```
-<!-- AUTO-GENERATED-TASK-DEF-END -->"""
-    
-    # Replace or add sections
-    readme_content = replace_section(readme_content, 
-                                   '<!-- AUTO-GENERATED-YAML-START -->', 
-                                   '<!-- AUTO-GENERATED-YAML-END -->', 
-                                   yaml_section)
-    
-    readme_content = replace_section(readme_content, 
-                                   '<!-- AUTO-GENERATED-TASK-DEF-START -->', 
-                                   '<!-- AUTO-GENERATED-TASK-DEF-END -->', 
-                                   task_def_section)
-    
+    # Replace content between markers
+    start_idx = readme_content.find(start_marker)
+    end_idx = readme_content.find(end_marker)
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        new_readme = readme_content[:start_idx + len(start_marker)] + '\n' + dynamic_content + '\n' + readme_content[end_idx:]
+    else:
+        # If markers not found, append them at the end
+        new_readme = readme_content.strip() + f"\n\n{start_marker}\n{dynamic_content}\n{end_marker}\n"
+
     # Write updated README
     with open(readme_path, 'w') as f:
-        f.write(readme_content)
-    
-    print("✅ README updated with latest examples and task definition")
+        f.write(new_readme)
+
+    print("✅ README updated with latest dynamic section")
 
 def replace_section(content, start_marker, end_marker, new_section):
     """Replace content between markers, or append if markers don't exist."""
     start_idx = content.find(start_marker)
     end_idx = content.find(end_marker)
-    
+
+    # Remove duplicate headings before the marker
+    def remove_heading_before_marker(text, heading, marker):
+        idx = text.find(marker)
+        if idx == -1:
+            return text
+        # Find heading before marker
+        heading_idx = text.rfind(heading, 0, idx)
+        if heading_idx != -1 and heading_idx + len(heading) == idx:
+            # Remove heading
+            text = text[:heading_idx] + text[idx:]
+        return text
+
+    if start_marker == '<!-- AUTO-GENERATED-YAML-START -->':
+        content = remove_heading_before_marker(content, '## 📋 Complete YAML Configuration Example\n', start_marker)
+    if start_marker == '<!-- AUTO-GENERATED-TASK-DEF-START -->':
+        content = remove_heading_before_marker(content, '## 🔧 Generated Task Definition\n', start_marker)
+
     if start_idx != -1 and end_idx != -1:
         # Replace existing section
         end_idx += len(end_marker)
