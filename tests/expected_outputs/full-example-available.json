@@ -19,7 +19,7 @@
         }
       ],
       "essential": false,
-      "image": "amazon/aws-cli",
+      "image": "public.ecr.aws/aws-cli/aws-cli:latest",
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
@@ -97,6 +97,7 @@
         }
       ],
       "essential": true,
+      "stopTimeout": 30,
       "healthCheck": {
         "command": [
           "CMD-SHELL",
