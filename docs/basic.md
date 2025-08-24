@@ -49,6 +49,7 @@ additional_ports:
   - health: 8081
 command: ["npm", "start"]
 entrypoint: ["/usr/local/bin/docker-entrypoint.sh"]
+stop_timeout: 30  # optional, seconds to wait before forcefully killing container
 health_check:
   command: "curl -f http://localhost:8080/health || exit 1"
   interval: 30
