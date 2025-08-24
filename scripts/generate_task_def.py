@@ -408,6 +408,7 @@ def build_app_container(config, image_uri, environment, secrets, health, cluster
     """Build the main application container"""
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
+    stop_timeout = config.get('stop_timeout')
     
     container_builder = ContainerBuilder(cluster_name, app_name, aws_region)
     
@@ -420,6 +421,10 @@ def build_app_container(config, image_uri, environment, secrets, health, cluster
         "entryPoint": entrypoint,
         "secrets": secrets
     }
+    
+    # Add stopTimeout if specified
+    if stop_timeout is not None:
+        app_container["stopTimeout"] = int(stop_timeout)
     
     # Set logConfiguration for app container
     if use_fluent_bit:

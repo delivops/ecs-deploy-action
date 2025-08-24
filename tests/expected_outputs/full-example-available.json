@@ -97,6 +97,7 @@
         }
       ],
       "essential": true,
+      "stopTimeout": 30,
       "healthCheck": {
         "command": [
           "CMD-SHELL",
