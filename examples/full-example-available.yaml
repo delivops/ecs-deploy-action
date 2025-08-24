@@ -38,6 +38,11 @@ command: ["npm", "start"]
 # Container entrypoint override
 entrypoint: ["/usr/local/bin/docker-entrypoint.sh"]
 
+# Container stop timeout in seconds (optional)
+# Specifies the time duration to wait before the container is forcefully killed 
+# if it doesn't exit normally on its own
+stop_timeout: 30
+
 # Health check configuration
 health_check:
   command: "curl -f http://localhost:8080/health || exit 1"

@@ -131,6 +131,56 @@ def compare_json(expected, actual):
     """Compare two JSON objects. Returns True if they match, False otherwise."""
     return expected == actual
 
+def show_json_diff(expected, actual, test_name):
+    """Show a readable diff between expected and actual JSON."""
+    import tempfile
+    import subprocess
+    
+    try:
+        # Create temporary files for diff
+        with tempfile.NamedTemporaryFile(mode='w', suffix='_expected.json', delete=False) as f1, \
+             tempfile.NamedTemporaryFile(mode='w', suffix='_actual.json', delete=False) as f2:
+            
+            # Write formatted JSON to temp files
+            json.dump(expected, f1, indent=2, sort_keys=True)
+            json.dump(actual, f2, indent=2, sort_keys=True)
+            
+            expected_file = f1.name
+            actual_file = f2.name
+        
+        # Try to use diff command if available
+        try:
+            result = subprocess.run(['diff', '-u', expected_file, actual_file], 
+                                  capture_output=True, text=True)
+            if result.stdout:
+                print("\n--- Differences found ---")
+                print(result.stdout)
+            else:
+                print("\nFiles are identical according to diff (this shouldn't happen)")
+        except FileNotFoundError:
+            # Fallback to manual comparison if diff command not available
+            print(f"\n--- Manual comparison for {test_name} ---")
+            print("Expected JSON (first 500 chars):")
+            expected_str = json.dumps(expected, indent=2)[:500]
+            print(expected_str + ("..." if len(json.dumps(expected, indent=2)) > 500 else ""))
+            
+            print("\nActual JSON (first 500 chars):")  
+            actual_str = json.dumps(actual, indent=2)[:500]
+            print(actual_str + ("..." if len(json.dumps(actual, indent=2)) > 500 else ""))
+        
+        # Clean up temp files
+        try:
+            os.unlink(expected_file)
+            os.unlink(actual_file)
+        except:
+            pass
+            
+    except Exception as e:
+        print(f"\nError showing diff: {e}")
+        print("Manual comparison:")
+        print(f"Expected keys: {list(expected.keys()) if isinstance(expected, dict) else type(expected)}")
+        print(f"Actual keys: {list(actual.keys()) if isinstance(actual, dict) else type(actual)}")
+
 def main():
     """Main test runner."""
     project_root = get_project_root()
@@ -188,8 +238,7 @@ def main():
                 print(f"✅ PASSED: {yaml_file.name} - Output matches expected")
             else:
                 print(f"❌ FAILED: {yaml_file.name} - Output does not match expected")
-                print("Expected vs Actual differences found.")
-                print("To see detailed differences, you can use a JSON diff tool.")
+                show_json_diff(expected_output, actual_output, yaml_file.name)
                 failed_tests.append(yaml_file.name)
     
     # Print summary
