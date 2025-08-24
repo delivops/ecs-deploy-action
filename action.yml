@@ -61,7 +61,12 @@ runs:
           echo "container_registry=" >> $GITHUB_OUTPUT
         fi
       shell: bash
-      
+
+    - id: install_dependencies
+      run: |
+        python3 -m pip install -r ${{ github.action_path }}/requirements.txt
+      shell: bash
+
     - id: generate-task-def
       run: |
         python3 ${{ github.action_path }}/scripts/generate_task_def.py \
