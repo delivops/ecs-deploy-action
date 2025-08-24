@@ -61,7 +61,12 @@ runs:
           echo "container_registry=" >> $GITHUB_OUTPUT
         fi
       shell: bash
-      
+
+    - id: install_dependencies
+      run: |
+        python3 -m pip install -r ${{ github.action_path }}/requirements.txt
+      shell: bash
+
     - id: generate-task-def
       run: |
         python3 ${{ github.action_path }}/scripts/generate_task_def.py \
@@ -75,7 +80,7 @@ runs:
           "${{ inputs.ecs_service }}"
       shell: bash
 
-    - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.3.2
+    - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.3.4
       if: ${{ inputs.dry_run }} == 'false'
       id: ecs-deploy
       with:
