@@ -97,3 +97,20 @@ secret_files:
   - private-key
   - config-file
 ```
+
+By default, secret files are downloaded to `/etc/secrets/` inside the container. You can customize this path using the `secrets_files_path` option:
+
+```yaml
+secret_files:
+  - ssl-certificate  
+  - private-key
+  - config-file
+secrets_files_path: "/app/secrets"  # Custom path instead of /etc/secrets
+```
+
+This will:
+- Download secrets to `/app/secrets/` instead of `/etc/secrets/`
+- Mount the shared volume at `/app/secrets/` for both init and main containers
+- Update all file paths in the init container commands accordingly
+
+The `secrets_files_path` setting affects both where files are written by the init container and where they're mounted in your application container.
