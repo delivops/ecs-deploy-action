@@ -354,7 +354,7 @@ def build_image_uri(container_registry: Optional[str], image_name: str, tag: str
     logger.info(f"Container image URI: {image_uri}")
     return image_uri
 
-def build_init_containers(config, secret_files, cluster_name, app_name, aws_region):
+def build_init_containers(config, secret_files, cluster_name, app_name, aws_region, secrets_files_path="/etc/secrets"):
     """Build init containers for secret file downloads"""
     container_definitions = []
     
@@ -374,9 +374,9 @@ def build_init_containers(config, secret_files, cluster_name, app_name, aws_regi
                 "-c",
                 "for secret in ${SECRET_FILES//,/ }; do "
                 "echo \"Fetching $secret...\"; "
-                "aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretString --output text > /etc/secrets/$secret; "
-                "if [ $? -eq 0 ] && [ -s /etc/secrets/$secret ]; then "
-                "echo \"✅ Successfully saved $secret to /etc/secrets/$secret\"; "
+                f"aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretString --output text > {secrets_files_path}/$secret; "
+                f"if [ $? -eq 0 ] && [ -s {secrets_files_path}/$secret ]; then "
+                f"echo \"✅ Successfully saved $secret to {secrets_files_path}/$secret\"; "
                 "else echo \"❌ Failed to save $secret\" >&2; exit 1; "
                 "fi; "
                 "done"
@@ -394,7 +394,7 @@ def build_init_containers(config, secret_files, cluster_name, app_name, aws_regi
             "mountPoints": [
                 {
                     "sourceVolume": "shared-volume",
-                    "containerPath": "/etc/secrets"
+                    "containerPath": secrets_files_path
                 }
             ],
             "logConfiguration": container_builder.build_log_configuration(stream_prefix="ssm-file-downloader")
@@ -404,7 +404,7 @@ def build_init_containers(config, secret_files, cluster_name, app_name, aws_regi
     
     return container_definitions
 
-def build_app_container(config, image_uri, environment, secrets, health, cluster_name, app_name, aws_region, use_fluent_bit, has_secret_files):
+def build_app_container(config, image_uri, environment, secrets, health, cluster_name, app_name, aws_region, use_fluent_bit, has_secret_files, secrets_files_path="/etc/secrets"):
     """Build the main application container"""
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
@@ -452,7 +452,7 @@ def build_app_container(config, image_uri, environment, secrets, health, cluster
         app_container["mountPoints"] = [
             {
                 "sourceVolume": "shared-volume",
-                "containerPath": "/etc/secrets"
+                "containerPath": secrets_files_path
             }
         ]
         # Add dependency on init containers
@@ -710,6 +710,9 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
     secret_files = config.get('secret_files', [])
     has_secret_files = len(secret_files) > 0
     
+    # Get configurable secrets files path (defaults to /etc/secrets)
+    secrets_files_path = config.get('secrets_files_path', '/etc/secrets')
+    
     # Create shared volume for secret files if needed
     volumes = []
     if has_secret_files:
@@ -728,11 +731,11 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
     container_definitions = []
     
     # Create init containers for secret files if needed
-    init_containers = build_init_containers(config, secret_files, cluster_name, app_name, aws_region)
+    init_containers = build_init_containers(config, secret_files, cluster_name, app_name, aws_region, secrets_files_path)
     container_definitions.extend(init_containers)
 
     # Add the main application container
-    app_container = build_app_container(config, image_uri, environment, secrets, health, cluster_name, app_name, aws_region, use_fluent_bit, has_secret_files)
+    app_container = build_app_container(config, image_uri, environment, secrets, health, cluster_name, app_name, aws_region, use_fluent_bit, has_secret_files, secrets_files_path)
     container_definitions.append(app_container)
 
     # Add fluent-bit sidecar container if enabled
