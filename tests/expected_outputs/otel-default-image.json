@@ -1,8 +1,9 @@
 {
   "containerDefinitions": [
     {
-      "command": [],
-      "entryPoint": [],
+      "name": "app",
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-app:latest",
+      "essential": true,
       "environment": [
         {
           "name": "NODE_ENV",
@@ -13,8 +14,9 @@
           "value": "v1"
         }
       ],
-      "essential": true,
-      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-app:latest",
+      "command": [],
+      "entryPoint": [],
+      "secrets": [],
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
@@ -23,35 +25,39 @@
           "awslogs-stream-prefix": "/default"
         }
       },
-      "name": "app",
       "portMappings": [
         {
-          "appProtocol": "http",
+          "name": "default",
           "containerPort": 8080,
           "hostPort": 8080,
-          "name": "default",
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ]
+    },
+    {
+      "name": "otel-collector",
+      "image": "public.ecr.aws/aws-observability/aws-otel-collector:latest",
+      "portMappings": [
+        {
+          "name": "otel-collector-4317-tcp",
+          "containerPort": 4317,
+          "hostPort": 4317,
+          "protocol": "tcp",
+          "appProtocol": "grpc"
+        },
+        {
+          "name": "otel-collector-4318-tcp",
+          "containerPort": 4318,
+          "hostPort": 4318,
           "protocol": "tcp"
         }
       ],
-      "secrets": []
-    },
-    {
+      "essential": true,
       "command": [
         "--config",
         "env:SSM_CONFIG"
       ],
-      "environment": [
-        {
-          "name": "METRICS_PATH",
-          "value": "/metrics"
-        },
-        {
-          "name": "METRICS_PORT",
-          "value": "8080"
-        }
-      ],
-      "essential": true,
-      "image": "public.ecr.aws/aws-observability/aws-otel-collector:latest",
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
@@ -60,20 +66,14 @@
           "awslogs-stream-prefix": "otel-collector"
         }
       },
-      "name": "otel-collector",
-      "portMappings": [
+      "environment": [
         {
-          "appProtocol": "grpc",
-          "containerPort": 4317,
-          "hostPort": 4317,
-          "name": "otel-collector-4317-tcp",
-          "protocol": "tcp"
+          "name": "METRICS_PATH",
+          "value": "/metrics"
         },
         {
-          "containerPort": 4318,
-          "hostPort": 4318,
-          "name": "otel-collector-4318-tcp",
-          "protocol": "tcp"
+          "name": "METRICS_PORT",
+          "value": "8080"
         }
       ],
       "secrets": [
@@ -85,16 +85,16 @@
     }
   ],
   "cpu": "512",
-  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
-  "family": "test-cluster_test-service",
   "memory": "1024",
-  "networkMode": "awsvpc",
-  "requiresCompatibilities": [
-    "FARGATE"
-  ],
   "runtimePlatform": {
     "cpuArchitecture": "X86_64",
     "operatingSystemFamily": "LINUX"
   },
-  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole"
+  "family": "test-cluster_test-service",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ]
 }
