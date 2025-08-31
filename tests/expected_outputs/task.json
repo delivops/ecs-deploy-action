@@ -1,12 +1,15 @@
 {
   "containerDefinitions": [
     {
-      "command": [
-        "-c",
-        "for secret in ${SECRET_FILES//,/ }; do echo \"Fetching $secret...\"; aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretString --output text > /etc/secrets/$secret; if [ $? -eq 0 ] && [ -s /etc/secrets/$secret ]; then echo \"\u2705 Successfully saved $secret to /etc/secrets/$secret\"; else echo \"\u274c Failed to save $secret\" >&2; exit 1; fi; done"
-      ],
+      "name": "init-container-for-secret-files",
+      "image": "public.ecr.aws/aws-cli/aws-cli:latest",
+      "essential": false,
       "entryPoint": [
         "/bin/sh"
+      ],
+      "command": [
+        "-c",
+        "for secret in ${SECRET_FILES//,/ }; do echo \"Fetching $secret...\"; echo \"Debug: AWS_REGION=$AWS_REGION, SECRET_PATH=/etc/secrets\"; # First try to get as SecretString (for text secrets)SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretString --output text 2>/dev/null); STRING_RESULT=$?; if [ $STRING_RESULT -eq 0 ] && [ -n \"$SECRET_VALUE\" ] && [ \"$SECRET_VALUE\" != \"null\" ] && [ \"$SECRET_VALUE\" != \"none\" ] && [ \"$SECRET_VALUE\" != \"None\" ]; then echo \"Found text secret, saving to /etc/secrets/$secret\"; echo \"$SECRET_VALUE\" > /etc/secrets/$secret; else echo \"Text retrieval failed or returned null, trying binary retrieval...\"; # Try to get as SecretBinary (for binary secrets like certificates/keys)aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretBinary --output text | base64 -d > /etc/secrets/$secret 2>/dev/null; BINARY_RESULT=$?; if [ $BINARY_RESULT -eq 0 ] && [ -s {secrets_files_path}/$secret ]; then echo \"Found binary secret, saved to /etc/secrets/$secret\"; else echo \"\u274c Failed to retrieve $secret as either text or binary\" >&2; echo \"Text result: $STRING_RESULT, Binary result: $BINARY_RESULT\" >&2; exit 1; fi; fi; echo \"\u2705 Successfully saved $secret to /etc/secrets/$secret (size: $(stat -c%s /etc/secrets/$secret 2>/dev/null || wc -c < /etc/secrets/$secret))\"; done"
       ],
       "environment": [
         {
@@ -18,8 +21,12 @@
           "value": "us-east-1"
         }
       ],
-      "essential": false,
-      "image": "public.ecr.aws/aws-cli/aws-cli:latest",
+      "mountPoints": [
+        {
+          "sourceVolume": "shared-volume",
+          "containerPath": "/etc/secrets"
+        }
+      ],
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
@@ -27,32 +34,12 @@
           "awslogs-region": "us-east-1",
           "awslogs-stream-prefix": "ssm-file-downloader"
         }
-      },
-      "mountPoints": [
-        {
-          "containerPath": "/etc/secrets",
-          "sourceVolume": "shared-volume"
-        }
-      ],
-      "name": "init-container-for-secret-files"
+      }
     },
     {
-      "command": [
-        "hello"
-      ],
-      "dependsOn": [
-        {
-          "condition": "SUCCESS",
-          "containerName": "init-container-for-secret-files"
-        },
-        {
-          "condition": "START",
-          "containerName": "fluent-bit"
-        }
-      ],
-      "entryPoint": [
-        "world"
-      ],
+      "name": "app",
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-app:latest",
+      "essential": true,
       "environment": [
         {
           "name": "NODE_ENV",
@@ -63,51 +50,11 @@
           "value": "xyz123"
         }
       ],
-      "essential": true,
-      "healthCheck": {
-        "command": [
-          "CMD-SHELL",
-          "curl -f http://localhost/ || exit 1"
-        ],
-        "interval": 30,
-        "retries": 3,
-        "startPeriod": 10,
-        "timeout": 5
-      },
-      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-app:latest",
-      "logConfiguration": {
-        "logDriver": "awsfirelens",
-        "options": {}
-      },
-      "mountPoints": [
-        {
-          "containerPath": "/etc/secrets",
-          "sourceVolume": "shared-volume"
-        }
+      "command": [
+        "hello"
       ],
-      "name": "app",
-      "portMappings": [
-        {
-          "appProtocol": "http",
-          "containerPort": 8080,
-          "hostPort": 8080,
-          "name": "default",
-          "protocol": "tcp"
-        },
-        {
-          "appProtocol": "http",
-          "containerPort": 8081,
-          "hostPort": 8081,
-          "name": "name",
-          "protocol": "tcp"
-        },
-        {
-          "appProtocol": "http",
-          "containerPort": 8082,
-          "hostPort": 8082,
-          "name": "name2",
-          "protocol": "tcp"
-        }
+      "entryPoint": [
+        "world"
       ],
       "secrets": [
         {
@@ -118,9 +65,65 @@
           "name": "CLIENT_NAME",
           "valueFrom": "arn:aws:secretsmanager::secret:ava-cortex-analyst-production-IhUQht:CLIENT_NAME::"
         }
+      ],
+      "logConfiguration": {
+        "logDriver": "awsfirelens",
+        "options": {}
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "curl -f http://localhost/ || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 10
+      },
+      "portMappings": [
+        {
+          "name": "default",
+          "containerPort": 8080,
+          "hostPort": 8080,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        },
+        {
+          "name": "name",
+          "containerPort": 8081,
+          "hostPort": 8081,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        },
+        {
+          "name": "name2",
+          "containerPort": 8082,
+          "hostPort": 8082,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "shared-volume",
+          "containerPath": "/etc/secrets"
+        }
+      ],
+      "dependsOn": [
+        {
+          "containerName": "init-container-for-secret-files",
+          "condition": "SUCCESS"
+        },
+        {
+          "containerName": "fluent-bit",
+          "condition": "START"
+        }
       ]
     },
     {
+      "name": "fluent-bit",
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/fluent-bit:latest",
+      "essential": true,
       "environment": [
         {
           "name": "SERVICE_NAME",
@@ -131,26 +134,16 @@
           "value": "test-cluster"
         }
       ],
-      "essential": true,
-      "firelensConfiguration": {
-        "options": {
-          "config-file-type": "file",
-          "config-file-value": "extra/extra.conf",
-          "enable-ecs-log-metadata": "true"
-        },
-        "type": "fluentbit"
-      },
       "healthCheck": {
         "command": [
           "CMD-SHELL",
           "curl -f http://127.0.0.1:2020/api/v1/health || exit 1"
         ],
         "interval": 10,
+        "timeout": 5,
         "retries": 3,
-        "startPeriod": 5,
-        "timeout": 5
+        "startPeriod": 5
       },
-      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/fluent-bit:latest",
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
@@ -159,25 +152,38 @@
           "awslogs-stream-prefix": "fluentbit"
         }
       },
-      "name": "fluent-bit"
+      "firelensConfiguration": {
+        "type": "fluentbit",
+        "options": {
+          "config-file-type": "file",
+          "config-file-value": "extra/extra.conf",
+          "enable-ecs-log-metadata": "true"
+        }
+      }
     },
     {
+      "name": "otel-collector",
+      "image": "public.ecr.aws/aws-observability/aws-otel-collector:latest",
+      "portMappings": [
+        {
+          "name": "otel-collector-4317-tcp",
+          "containerPort": 4317,
+          "hostPort": 4317,
+          "protocol": "tcp",
+          "appProtocol": "grpc"
+        },
+        {
+          "name": "otel-collector-4318-tcp",
+          "containerPort": 4318,
+          "hostPort": 4318,
+          "protocol": "tcp"
+        }
+      ],
+      "essential": true,
       "command": [
         "--config",
         "env:SSM_CONFIG"
       ],
-      "environment": [
-        {
-          "name": "METRICS_PATH",
-          "value": "/metrics"
-        },
-        {
-          "name": "METRICS_PORT",
-          "value": "8080"
-        }
-      ],
-      "essential": true,
-      "image": "public.ecr.aws/aws-observability/aws-otel-collector:latest",
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
@@ -186,20 +192,14 @@
           "awslogs-stream-prefix": "otel-collector"
         }
       },
-      "name": "otel-collector",
-      "portMappings": [
+      "environment": [
         {
-          "appProtocol": "grpc",
-          "containerPort": 4317,
-          "hostPort": 4317,
-          "name": "otel-collector-4317-tcp",
-          "protocol": "tcp"
+          "name": "METRICS_PATH",
+          "value": "/metrics"
         },
         {
-          "containerPort": 4318,
-          "hostPort": 4318,
-          "name": "otel-collector-4318-tcp",
-          "protocol": "tcp"
+          "name": "METRICS_PORT",
+          "value": "8080"
         }
       ],
       "secrets": [
@@ -211,22 +211,22 @@
     }
   ],
   "cpu": "512",
-  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
-  "family": "test-cluster_test-service",
   "memory": "1024",
-  "networkMode": "awsvpc",
-  "requiresCompatibilities": [
-    "FARGATE"
-  ],
   "runtimePlatform": {
     "cpuArchitecture": "ARM64",
     "operatingSystemFamily": "LINUX"
   },
+  "family": "test-cluster_test-service",
   "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
   "volumes": [
     {
-      "host": {},
-      "name": "shared-volume"
+      "name": "shared-volume",
+      "host": {}
     }
   ]
 }
