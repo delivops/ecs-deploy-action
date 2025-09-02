@@ -119,6 +119,10 @@ fluent_bit_collector:
   
   # Enable ECS log metadata in Fluent Bit
   ecs_log_metadata: "true"
+  
+  # Optional: Custom service name for SERVICE_NAME environment variable
+  # Defaults to app name if not specified
+  # service_name: "my-custom-service"
 
 # =============================================================================
 # OBSERVABILITY - OPENTELEMETRY

@@ -495,6 +495,8 @@ def build_fluent_bit_container(config, fluent_bit_image, app_name, cluster_name,
     fluent_bit_collector = config.get('fluent_bit_collector', {})
     config_name = fluent_bit_collector.get('extra_config', "extra.conf")
     ecs_log_metadata = fluent_bit_collector.get('ecs_log_metadata', 'true')
+    # Allow custom service_name, default to app_name if not specified
+    fluent_bit_service_name = fluent_bit_collector.get('service_name', app_name)
     extra_config = f"extra/{config_name}"
     
     fluent_bit_container = {
@@ -502,7 +504,7 @@ def build_fluent_bit_container(config, fluent_bit_image, app_name, cluster_name,
         "image": fluent_bit_image,  # Always ECR-style
         "essential": True,  # Critical sidecar - if it fails, task should fail
         "environment": [
-            {"name": "SERVICE_NAME", "value": app_name},
+            {"name": "SERVICE_NAME", "value": fluent_bit_service_name},
             {"name": "ENV", "value": cluster_name}
         ],
         "healthCheck": {
