@@ -133,29 +133,33 @@ class ContainerBuilder:
         }
     
     def build_port_mappings(self, main_port: Optional[int], 
-                           additional_ports: List[Dict[str, int]]) -> List[Dict[str, Any]]:
+                           additional_ports: List[Dict[str, int]], app_protocol: str = "http") -> List[Dict[str, Any]]:
         """Build port mappings configuration"""
         port_mappings = []
         
         if main_port:
-            port_mappings.append({
+            port_mapping = {
                 "name": "default",
                 "containerPort": main_port,
                 "hostPort": main_port,
-                "protocol": "tcp",
-                "appProtocol": "http"
-            })
+                "protocol": "tcp"
+            }
+            if app_protocol != "tcp":
+                port_mapping["appProtocol"] = app_protocol
+            port_mappings.append(port_mapping)
         
         for port_info in additional_ports:
             if isinstance(port_info, dict):
                 for name, port in port_info.items():
-                    port_mappings.append({
+                    port_mapping = {
                         "name": name,
                         "containerPort": port,
                         "hostPort": port,
-                        "protocol": "tcp",
-                        "appProtocol": "http"
-                    })
+                        "protocol": "tcp"
+                    }
+                    if app_protocol != "tcp":
+                        port_mapping["appProtocol"] = app_protocol
+                    port_mappings.append(port_mapping)
         
         self.logger.debug(f"Built {len(port_mappings)} port mappings")
         return port_mappings
@@ -456,8 +460,9 @@ def build_app_container(config, image_uri, environment, secrets, health, cluster
     # Handle port configurations
     main_port = config.get('port')
     additional_ports = config.get('additional_ports', [])
+    app_protocol = config.get('app_protocol', 'http')
     
-    port_mappings = container_builder.build_port_mappings(main_port, additional_ports)
+    port_mappings = container_builder.build_port_mappings(main_port, additional_ports, app_protocol)
     if port_mappings:
         app_container["portMappings"] = port_mappings
     
