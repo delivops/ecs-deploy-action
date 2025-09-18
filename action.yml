@@ -83,22 +83,34 @@ runs:
     - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.3.4
       if: ${{ inputs.dry_run }} == 'false'
       id: ecs-deploy
+      continue-on-error: true
       with:
         task-definition: task-definition.json
         service: ${{ inputs.ecs_service }}
         cluster: ${{ inputs.ecs_cluster }}
         desired-count: ${{ steps.generate-task-def.outputs.replica_count }}
         wait-for-service-stability: true
-        
-    - id: check-deployment
-      if: ${{ inputs.dry_run }} == 'false'
+
+    - id: report-deployment-status
+      if: ${{ inputs.dry_run == 'false' }}
       run: |
-         CURRENT_TASK_DEF_ARN=$(aws ecs describe-services --cluster ${{ inputs.ecs_cluster }} --services ${{ inputs.ecs_service }} --query services[0].deployments[0].taskDefinition | jq -r ".")
-         NEW_TASK_DEF_ARN=${{ steps.ecs-deploy.outputs.task-definition-arn }}
-         echo "Current task arn: $CURRENT_TASK_DEF_ARN"
-         echo "New task arn: $NEW_TASK_DEF_ARN"
-         if [ "$CURRENT_TASK_DEF_ARN" != "$NEW_TASK_DEF_ARN" ]; then
-           echo "Deployment failed."
-           exit 1
-         fi
+        set -e
+        TASK_DEF="${{ steps.ecs-deploy.outputs['task-definition-arn'] }}"
+
+        if [ -n "$TASK_DEF" ]; then
+          python3 ${{ github.action_path }}/scripts/check_deployment_status.py \
+            "${{ inputs.ecs_cluster }}" \
+            "${{ inputs.ecs_service }}" \
+            --region "${{ inputs.aws_region }}" \
+            --max-attempts 1 \
+            --deployment-outcome "${{ steps.ecs-deploy.outcome }}" \
+            --task-definition "$TASK_DEF"
+        else
+          python3 ${{ github.action_path }}/scripts/check_deployment_status.py \
+            "${{ inputs.ecs_cluster }}" \
+            "${{ inputs.ecs_service }}" \
+            --region "${{ inputs.aws_region }}" \
+            --max-attempts 1 \
+            --deployment-outcome "${{ steps.ecs-deploy.outcome }}"
+        fi
       shell: bash
