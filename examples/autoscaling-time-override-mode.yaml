@@ -1,0 +1,50 @@
+# Example: Time-based autoscaling with override mode
+# In override mode, the time scheduler directly sets desired capacity
+name: batch-processor
+replica_count: 3
+cpu: 2048
+memory: 4096
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+
+envs:
+  - BATCH_MODE: scheduled
+
+autoscaling_configs:
+  provider:
+    type: time
+    time:
+      timezone: Europe/London
+      mode: override  # Directly set desired capacity (not min/max)
+      rules:
+        # Peak processing hours - run exactly 20 tasks
+        - days: [mon, tue, wed, thu, fri]
+          start: "02:00"
+          end: "06:00"
+          desired: 20
+        
+        # Business hours - run 10 tasks
+        - days: [mon, tue, wed, thu, fri]
+          start: "09:00"
+          end: "17:00"
+          desired: 10
+        
+        # Off-peak - run minimal 2 tasks
+        - days: [mon, tue, wed, thu, fri]
+          start: "17:00"
+          end: "23:59"
+          desired: 2
+        
+        - days: [mon, tue, wed, thu, fri]
+          start: "00:00"
+          end: "02:00"
+          desired: 2
+        
+        # Weekend - 1 task only
+        - days: [sat, sun]
+          desired: 1
+  
+  min_tasks: 1
+  max_tasks: 25
+  scale_out_cooldown_seconds: 60
+  scale_in_cooldown_seconds: 120
+

@@ -10,6 +10,7 @@ This GitHub Action automates the deployment of containerized applications to Ama
 - Supports task definition updates
 - Handles service updates with zero-downtime deployment
 - Configurable deployment parameters
+- **Automatic autoscaling config publishing to DynamoDB** (opt-in)
 - Integration with GitHub Actions workflow
 
 ### Example Usage
@@ -50,3 +51,31 @@ jobs:
           task-definition: task-definition.json
           aws-region: us-east-1
 ```
+
+## Documentation
+
+- [Autoscaling Configuration](docs/autoscaling.md) - Declarative autoscaling configs published to DynamoDB
+- [Architecture](docs/architecture.md) - System architecture and design
+- [Secrets Management](docs/secrets.md) - Managing secrets and environment variables
+- [Health Checks](docs/health-check.md) - Container health check configuration
+- [Examples](examples/) - Example YAML configurations
+
+## Autoscaling Support
+
+This action supports automatic publishing of autoscaling configurations to DynamoDB. Simply add an `autoscaling_configs` block to your deployment YAML:
+
+```yaml
+autoscaling_configs:
+  provider:
+    type: sqs
+    sqs:
+      queue_url: https://sqs.us-east-1.amazonaws.com/123456789012/my-queue
+  
+  min_tasks: 2
+  max_tasks: 50
+  target_max_message_age_seconds: 120
+  scale_out_cooldown_seconds: 90
+  scale_in_cooldown_seconds: 600
+```
+
+The action will validate and publish the configuration atomically to DynamoDB table `${ecs_cluster}_ecs_autoscaling_config`. See [Autoscaling Documentation](docs/autoscaling.md) for full details.

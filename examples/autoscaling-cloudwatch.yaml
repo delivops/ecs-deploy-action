@@ -1,0 +1,32 @@
+# Example: CloudWatch-based autoscaling (CPU threshold)
+name: cpu-intensive-app
+replica_count: 3
+cpu: 2048
+memory: 8192
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+port: 8080
+
+envs:
+  - APP_ENV: production
+
+autoscaling_configs:
+  provider:
+    type: cloudwatch
+    cloudwatch:
+      namespace: AWS/ECS
+      metric_name: CPUUtilization
+      dimensions:
+        ClusterName: production
+        ServiceName: cpu_intensive_app
+      stat: Average
+      period_s: 60
+      threshold: 70
+      comparison: ">"
+  
+  min_tasks: 3
+  max_tasks: 50
+  scale_out_cooldown_seconds: 120
+  scale_in_cooldown_seconds: 600
+  max_scale_out_percent: 30
+  max_scale_in_tasks: 1
+

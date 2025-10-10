@@ -1,0 +1,27 @@
+# Example: SQS-based autoscaling with basic configuration
+name: queue-worker
+replica_count: 2
+cpu: 512
+memory: 1024
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+port: 8080
+
+envs:
+  - APP_ENV: production
+  - LOG_LEVEL: info
+
+autoscaling_configs:
+  provider:
+    type: sqs
+    sqs:
+      queue_url: https://sqs.us-east-1.amazonaws.com/123456789012/production-queue
+  
+  min_tasks: 2
+  max_tasks: 50
+  target_max_message_age_seconds: 120
+  scale_out_cooldown_seconds: 90
+  scale_in_cooldown_seconds: 600
+  max_scale_out_percent: 25
+  max_scale_in_tasks: 1
+  scale_in_guard:
+    mode: empty_queue

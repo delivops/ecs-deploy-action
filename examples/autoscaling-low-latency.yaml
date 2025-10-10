@@ -1,0 +1,32 @@
+# Example: SQS autoscaling with low-latency scale-in guard
+name: real-time-processor
+replica_count: 5
+cpu: 1024
+memory: 2048
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+port: 8080
+
+envs:
+  - APP_ENV: production
+  - PROCESSOR_TYPE: realtime
+
+autoscaling_configs:
+  provider:
+    type: sqs
+    sqs:
+      queue_url: https://sqs.us-east-1.amazonaws.com/123456789012/realtime-processor-queue
+  
+  min_tasks: 5
+  max_tasks: 100
+  target_max_message_age_seconds: 60
+  scale_out_cooldown_seconds: 30
+  scale_in_cooldown_seconds: 300
+  max_scale_out_percent: 50
+  max_scale_in_tasks: 2
+  
+  # Low-latency mode: only scale in if queue age is low AND visible messages are low
+  scale_in_guard:
+    mode: low_latency
+    age_below_seconds: 20
+    visible_below: 200
+
