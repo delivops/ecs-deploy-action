@@ -1,0 +1,47 @@
+# Example: Time-based autoscaling with business hours schedule
+name: api-service
+replica_count: 4
+cpu: 1024
+memory: 2048
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+port: 3000
+
+envs:
+  - NODE_ENV: production
+  - API_VERSION: v1
+
+autoscaling_configs:
+  provider:
+    type: time
+    time:
+      timezone: America/New_York
+      mode: floor
+      rules:
+        # Weekday business hours - maintain at least 10 tasks
+        - days: [mon, tue, wed, thu, fri]
+          start: "09:00"
+          end: "18:00"
+          min_desired: 10
+        
+        # Weekday off-hours - scale down to 2 tasks
+        - days: [mon, tue, wed, thu, fri]
+          start: "00:00"
+          end: "09:00"
+          min_desired: 2
+        
+        - days: [mon, tue, wed, thu, fri]
+          start: "18:00"
+          end: "23:59"
+          min_desired: 2
+        
+        # Weekend - minimal capacity
+        - days: [sat, sun]
+          min_desired: 1
+  
+  min_tasks: 1
+  max_tasks: 50
+  scale_out_cooldown_seconds: 60
+  scale_in_cooldown_seconds: 300
+  max_scale_out_percent: 50
+  max_scale_in_tasks: 2
+

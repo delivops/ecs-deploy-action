@@ -39,6 +39,20 @@ inputs:
     required: false
     default: 'true'
 
+outputs:
+  autoscaler_published:
+    description: 'Whether autoscaling config was published to DynamoDB (true/false)'
+    value: ${{ steps.publish-autoscaling.outputs.autoscaler_published }}
+  autoscaler_service_key:
+    description: 'DynamoDB service key for autoscaling config'
+    value: ${{ steps.publish-autoscaling.outputs.autoscaler_service_key }}
+  autoscaler_checksum:
+    description: 'SHA256 checksum of published autoscaling config'
+    value: ${{ steps.publish-autoscaling.outputs.autoscaler_checksum }}
+  autoscaler_updated_at:
+    description: 'Unix timestamp when autoscaling config was updated'
+    value: ${{ steps.publish-autoscaling.outputs.autoscaler_updated_at }}
+
 runs:
   using: "composite"
   steps:
@@ -101,4 +115,15 @@ runs:
            echo "Deployment failed."
            exit 1
          fi
+      shell: bash
+
+    - id: publish-autoscaling
+      if: ${{ inputs.dry_run }} == 'false'
+      run: |
+        python3 ${{ github.action_path }}/scripts/publish_autoscaling.py \
+          "${{ inputs.task_config_yaml }}" \
+          "${{ inputs.environment }}" \
+          "${{ inputs.ecs_cluster }}" \
+          "${{ inputs.ecs_service }}" \
+          "${{ inputs.aws_region }}"
       shell: bash

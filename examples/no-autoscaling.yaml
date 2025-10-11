@@ -1,0 +1,15 @@
+# Example: Configuration WITHOUT autoscaling
+# This demonstrates that autoscaling_configs is completely optional
+name: simple-app
+replica_count: 3
+cpu: 256
+memory: 512
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+port: 8080
+
+envs:
+  - APP_ENV: production
+  - LOG_LEVEL: info
+
+# No autoscaling_configs block - action will skip autoscaling publish
+

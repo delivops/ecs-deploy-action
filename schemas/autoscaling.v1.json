@@ -1,0 +1,252 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Autoscaling Configuration Schema v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["provider", "min_tasks", "max_tasks"],
+  "properties": {
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["sqs", "time", "sqs+time", "cloudwatch"]
+        },
+        "sqs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["queue_url"],
+          "properties": {
+            "queue_url": {
+              "type": "string",
+              "pattern": "^https://sqs\\.[a-z0-9-]+\\.amazonaws\\.com/[0-9]{12}/.+$"
+            }
+          }
+        },
+        "time": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "rules"],
+          "properties": {
+            "timezone": {
+              "type": "string",
+              "default": "UTC"
+            },
+            "mode": {
+              "type": "string",
+              "enum": ["override", "floor", "ceiling", "scale_in_only"]
+            },
+            "rules": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["days"],
+                "properties": {
+                  "days": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+                    }
+                  },
+                  "start": {
+                    "type": "string",
+                    "pattern": "^([0-1][0-9]|2[0-3]):[0-5][0-9]$"
+                  },
+                  "end": {
+                    "type": "string",
+                    "pattern": "^([0-1][0-9]|2[0-3]):[0-5][0-9]$"
+                  },
+                  "min_desired": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "desired": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "cloudwatch": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["namespace", "metric_name", "stat", "period_s", "threshold", "comparison"],
+          "properties": {
+            "namespace": {
+              "type": "string"
+            },
+            "metric_name": {
+              "type": "string"
+            },
+            "dimensions": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "stat": {
+              "type": "string",
+              "enum": ["Average", "Sum", "Minimum", "Maximum", "SampleCount"]
+            },
+            "period_s": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "threshold": {
+              "type": "number"
+            },
+            "comparison": {
+              "type": "string",
+              "enum": [">", ">=", "<", "<=", "==", "!="]
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "pattern": "^(sqs|sqs\\+time)$"
+              }
+            }
+          },
+          "then": {
+            "required": ["sqs"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "pattern": "^(time|sqs\\+time)$"
+              }
+            }
+          },
+          "then": {
+            "required": ["time"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "cloudwatch"
+              }
+            }
+          },
+          "then": {
+            "required": ["cloudwatch"]
+          }
+        }
+      ]
+    },
+    "min_tasks": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "max_tasks": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "target_max_message_age_seconds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "scale_out_cooldown_seconds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "scale_in_cooldown_seconds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "max_scale_out_percent": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "max_scale_in_tasks": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "scale_in_guard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["empty_queue", "low_latency"]
+        },
+        "age_below_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "visible_below": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "low_latency"
+              }
+            }
+          },
+          "then": {
+            "required": ["age_below_seconds", "visible_below"]
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "provider": {
+            "properties": {
+              "time": {
+                "properties": {
+                  "mode": {
+                    "const": "override"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "provider": {
+            "properties": {
+              "time": {
+                "properties": {
+                  "rules": {
+                    "contains": {
+                      "required": ["desired"]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
+
