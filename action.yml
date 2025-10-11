@@ -80,7 +80,7 @@ runs:
           "${{ inputs.ecs_service }}"
       shell: bash
 
-    - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.3.4
+    - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.4.0
       if: ${{ inputs.dry_run }} == 'false'
       id: ecs-deploy
       with:
