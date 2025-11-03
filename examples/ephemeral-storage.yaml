@@ -1,0 +1,12 @@
+# Ephemeral Storage Configuration Test
+# Tests customizing the ephemeral storage size (default is 20GB)
+name: app-with-large-storage
+replica_count: 2
+cpu: 512
+memory: 1024
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+ephemeral_storage: 100
+port: 8080
+envs:
+  - LOG_LEVEL: info
+

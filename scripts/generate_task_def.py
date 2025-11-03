@@ -787,6 +787,14 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
         ]
     }
     
+    # Add ephemeral storage if specified
+    ephemeral_storage = config.get('ephemeral_storage')
+    if ephemeral_storage is not None:
+        task_definition["ephemeralStorage"] = {
+            "sizeInGiB": int(ephemeral_storage)
+        }
+        logger.info(f"Set ephemeral storage size to {ephemeral_storage} GiB")
+    
     # Add volumes if needed
     if has_secret_files and volumes:
         task_definition["volumes"] = volumes
