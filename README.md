@@ -23,14 +23,17 @@ Deploy long-running services with automatic health checks and zero-downtime depl
 ### Scheduled Tasks
 Deploy EventBridge-scheduled tasks that run on a schedule. Infrastructure (EventBridge rules, network config, IAM roles) is managed in Terraform, while the GitHub Action handles task definition updates.
 
+### Triggerable Tasks
+Deploy standalone task definitions that can be triggered manually or by external systems (e.g., Lambda, Step Functions, other workflows). Only registers the task definition without any EventBridge configuration.
+
 ## Inputs
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `environment` | The environment to deploy to | Yes | - |
-| `deployment_type` | Deployment type: `service` or `scheduled_task` | No | `service` |
+| `deployment_type` | Deployment type: `service`, `scheduled_task`, or `triggerable_task` | No | `service` |
 | `ecs_service` | The name of the ECS service (required when `deployment_type=service`) | No | - |
-| `task_name` | The name of the scheduled task (required when `deployment_type=scheduled_task`) | No | - |
+| `task_name` | The name of the task (required when `deployment_type=scheduled_task` or `triggerable_task`) | No | - |
 | `image_name` | The name of the Docker image | Yes | - |
 | `tag` | The tag of the Docker image | Yes | - |
 | `task_config_yaml` | Path to the YAML file containing task configuration | Yes | - |
@@ -116,6 +119,41 @@ jobs:
           aws_region: us-east-1
 ```
 
+### Deploy Triggerable Task
+
+```yaml
+name: Deploy Triggerable Task
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Deploy Triggerable Task
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy Triggerable Task
+        uses: delivops/ecs-deploy-action@v1
+        with:
+          environment: production
+          deployment_type: triggerable_task
+          task_name: batch-job
+          ecs_cluster: production
+          image_name: batch-job
+          tag: ${{ github.sha }}
+          task_config_yaml: config/task.yaml
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: us-east-1
+```
+
 ## Task Configuration
 
 The action uses a simplified YAML configuration file for task definitions. See the [examples](./examples/) directory and [documentation](./docs/) for detailed configuration options including:
@@ -133,6 +171,10 @@ For scheduled tasks, the action:
 1. Generates an ECS task definition from your YAML config
 2. Registers the new task definition with ECS
 3. Updates the EventBridge rule target to use the new task definition
+
+For triggerable tasks, the action:
+1. Generates an ECS task definition from your YAML config
+2. Registers the new task definition with ECS
 
 All infrastructure (EventBridge rules, schedules, network configuration, IAM roles) remains managed in your Terraform code, ensuring clear separation of concerns between infrastructure and application deployments.
 

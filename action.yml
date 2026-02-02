@@ -6,14 +6,14 @@ inputs:
     description: 'The environment to deploy to'
     required: true
   deployment_type:
-    description: 'Deployment type: service or scheduled_task'
+    description: 'Deployment type: service, scheduled_task, or triggerable_task'
     default: 'service'
     required: false
   ecs_service:
     description: 'The name of the ECS service (required when deployment_type=service)' 
     required: false
   task_name:
-    description: 'The name of the scheduled task (required when deployment_type=scheduled_task)'
+    description: 'The name of the task (required when deployment_type=scheduled_task or triggerable_task)'
     required: false
   image_name:
     description: 'The name of the Docker image'
@@ -76,7 +76,7 @@ runs:
 
     - id: determine-name
       run: |
-        if [ "${{ inputs.deployment_type }}" == "scheduled_task" ]; then
+        if [ "${{ inputs.deployment_type }}" == "scheduled_task" ] || [ "${{ inputs.deployment_type }}" == "triggerable_task" ]; then
           echo "name=${{ inputs.task_name }}" >> $GITHUB_OUTPUT
         else
           echo "name=${{ inputs.ecs_service }}" >> $GITHUB_OUTPUT
@@ -120,9 +120,9 @@ runs:
          fi
       shell: bash
 
-    # Scheduled Task Deployment
+    # Scheduled Task / Triggerable Task Deployment
     - id: register-task-def
-      if: ${{ inputs.deployment_type == 'scheduled_task' && inputs.dry_run == 'false' }}
+      if: ${{ (inputs.deployment_type == 'scheduled_task' || inputs.deployment_type == 'triggerable_task') && inputs.dry_run == 'false' }}
       run: |
         # Register the new task definition
         TASK_DEF_ARN=$(aws ecs register-task-definition \
