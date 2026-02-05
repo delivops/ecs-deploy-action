@@ -521,14 +521,34 @@ def build_linux_parameters(config: Dict[str, Any], launch_type: str = "FARGATE")
     # swappiness - supported by Fargate (1.4.0+) and EC2
     swappiness = linux_params.get('swappiness')
     if swappiness is not None:
-        linux_parameters["swappiness"] = int(swappiness)
-        logger.info(f"Set swappiness to {swappiness}")
+        try:
+            swappiness_int = int(swappiness)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(
+                f"Invalid swappiness value {swappiness!r}; must be an integer between 0 and 100."
+            ) from exc
+        if not 0 <= swappiness_int <= 100:
+            raise ValidationError(
+                f"Invalid swappiness value {swappiness_int}; must be between 0 and 100."
+            )
+        linux_parameters["swappiness"] = swappiness_int
+        logger.info(f"Set swappiness to {swappiness_int}")
     
     # maxSwap - supported by Fargate (1.4.0+) and EC2
     max_swap = linux_params.get('max_swap')
     if max_swap is not None:
-        linux_parameters["maxSwap"] = int(max_swap)
-        logger.info(f"Set maxSwap to {max_swap}")
+        try:
+            max_swap_int = int(max_swap)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(
+                f"Invalid maxSwap value {max_swap!r}; must be a non-negative integer."
+            ) from exc
+        if max_swap_int < 0:
+            raise ValidationError(
+                f"Invalid maxSwap value {max_swap_int}; must be a non-negative integer."
+            )
+        linux_parameters["maxSwap"] = max_swap_int
+        logger.info(f"Set maxSwap to {max_swap_int}")
     
     # EC2-only parameters
     shared_memory_size = linux_params.get('shared_memory_size')
