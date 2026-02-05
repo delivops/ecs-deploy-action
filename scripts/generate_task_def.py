@@ -539,10 +539,18 @@ def build_linux_parameters(config: Dict[str, Any], launch_type: str = "FARGATE")
         else:
             devices = []
             for device in devices_config:
+                host_path = device.get('host_path')
+                if not host_path:
+                    raise ValidationError(
+                        "Each entry in linux_parameters.devices must include a non-empty 'host_path'. "
+                        f"Invalid device mapping: {device}"
+                    )
+                container_path = device.get('container_path', host_path)
+                permissions = device.get('permissions', ['read', 'write'])
                 device_mapping = {
-                    "hostPath": device.get('host_path', ''),
-                    "containerPath": device.get('container_path', device.get('host_path', '')),
-                    "permissions": device.get('permissions', ['read', 'write'])
+                    "hostPath": host_path,
+                    "containerPath": container_path,
+                    "permissions": permissions,
                 }
                 devices.append(device_mapping)
             if devices:
