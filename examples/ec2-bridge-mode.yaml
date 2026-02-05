@@ -1,0 +1,16 @@
+# EC2 Bridge Network Mode Test
+# Tests EC2 launch type with bridge network mode (dynamic host ports)
+name: ec2-bridge-app
+replica_count: 2
+cpu: 1024
+memory: 2048
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+
+# EC2 with bridge network mode
+launch_type: EC2
+network_mode: bridge
+
+port: 8080
+additional_ports:
+  - metrics: 9090
+  - health: 8081

@@ -1,0 +1,29 @@
+# Fargate Linux Parameters Test
+# Tests Fargate launch type with Fargate-compatible linux_parameters
+# EC2-only parameters should be logged as warnings and ignored
+name: fargate-linux-params-app
+replica_count: 1
+cpu: 512
+memory: 1024
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+
+# Fargate launch type (default, explicit for clarity)
+launch_type: FARGATE
+
+port: 8080
+
+# Linux parameters - Fargate compatible options only
+linux_parameters:
+  init_process_enabled: true
+  capabilities:
+    add:
+      - SYS_PTRACE
+    drop:
+      - NET_RAW
+  tmpfs:
+    - container_path: /run
+      size: 64
+  swappiness: 60
+  max_swap: 0
+  # These EC2-only options should be ignored with a warning:
+  shared_memory_size: 128
