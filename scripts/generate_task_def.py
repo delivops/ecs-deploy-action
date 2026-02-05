@@ -499,9 +499,16 @@ def build_linux_parameters(config: Dict[str, Any], launch_type: str = "FARGATE")
         tmpfs_mounts = []
         for mount in tmpfs_config:
             container_path = mount.get('container_path') or '/tmp'
+            raw_size = mount.get('size', 64)
+            try:
+                size = int(raw_size)
+            except (TypeError, ValueError):
+                raise ValidationError(f"Invalid tmpfs size '{raw_size}' for mount {mount!r}. Size must be a positive integer.")
+            if size <= 0:
+                raise ValidationError(f"Invalid tmpfs size '{raw_size}' for mount {mount!r}. Size must be a positive integer greater than zero.")
             tmpfs_mount = {
-                "containerPath": container_path,
-                "size": int(mount.get('size', 64))
+                "containerPath": mount.get('container_path', '/tmp'),
+                "size": size
             }
             mount_options = mount.get('mount_options', [])
             if mount_options:
