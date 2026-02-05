@@ -498,8 +498,9 @@ def build_linux_parameters(config: Dict[str, Any], launch_type: str = "FARGATE")
     if tmpfs_config:
         tmpfs_mounts = []
         for mount in tmpfs_config:
+            container_path = mount.get('container_path') or '/tmp'
             tmpfs_mount = {
-                "containerPath": mount.get('container_path', '/tmp'),
+                "containerPath": container_path,
                 "size": int(mount.get('size', 64))
             }
             mount_options = mount.get('mount_options', [])
