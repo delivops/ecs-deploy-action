@@ -598,7 +598,43 @@ def build_linux_parameters(config: Dict[str, Any], launch_type: str = "FARGATE")
     return linux_parameters if linux_parameters else None
 
 def build_app_container(config, image_uri, environment, secrets, health, cluster_name, app_name, aws_region, use_fluent_bit, has_secret_files, secrets_files_path="/etc/secrets", network_mode="awsvpc", launch_type="FARGATE"):
-    """Build the main application container"""
+    """
+    Build the main application container definition for the ECS task.
+
+    Args:
+        config: Application configuration dictionary used to derive container
+            properties such as command, entryPoint, ports, and linux parameters.
+        image_uri: Full URI of the container image to run.
+        environment: List of environment variable definitions to inject into
+            the container.
+        secrets: List of secret definitions to inject into the container.
+        health: Optional health check configuration dictionary. If provided,
+            it is added as the container's ``healthCheck``.
+        cluster_name: Name of the ECS cluster used for log configuration and
+            other contextual metadata.
+        app_name: Logical name of the application, used for log configuration
+            and identifying the container.
+        aws_region: AWS region where the task definition will be used.
+        use_fluent_bit: If True, configures the container to use a FireLens
+            (fluent-bit) sidecar for logging; otherwise uses awslogs directly.
+        has_secret_files: If True, mounts a shared volume at
+            ``secrets_files_path`` and adds a dependency on the init container
+            that populates secret files.
+        secrets_files_path: Container path where secret files should be
+            mounted when ``has_secret_files`` is True. Defaults to
+            ``"/etc/secrets"``.
+        network_mode: The network mode of the task (for example ``"awsvpc"``
+            or ``"bridge"``). Used when building port mappings to ensure they
+            are compatible with the task's networking configuration.
+        launch_type: The ECS launch type for the task (for example
+            ``"FARGATE"`` or ``"EC2"``). Passed through to
+            :func:`build_linux_parameters` to determine which Linux-specific
+            parameters are valid.
+
+    Returns:
+        A dictionary describing the main application container suitable for
+        inclusion in an ECS task definition.
+    """
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
     stop_timeout = config.get('stop_timeout')
