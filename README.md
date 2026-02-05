@@ -14,6 +14,8 @@ This GitHub Action automates the deployment of containerized applications to Ama
 - Support for OpenTelemetry and Fluent Bit sidecars
 - Secrets management integration
 - Integration with GitHub Actions workflow
+- **EC2 and Fargate launch type support**
+- **Linux parameters configuration** (init process, capabilities, shared memory, devices)
 
 ## Deployment Types
 
@@ -163,6 +165,8 @@ The action uses a simplified YAML configuration file for task definitions. See t
 - Health checks
 - Port mappings
 - OpenTelemetry and Fluent Bit integration
+- [EC2 launch type support](./docs/ec2-launch-type.md) (with bridge/host network modes)
+- [Linux parameters](./docs/linux-parameters.md) (init process, capabilities, shared memory, devices)
 - And more
 
 ## Architecture

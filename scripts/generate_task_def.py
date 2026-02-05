@@ -67,25 +67,50 @@ def validate_config(config: Dict[str, Any]) -> None:
     # Note: 'name' field is not required since service_name can be used instead
     # No required fields validation for now
     
+    # Get launch type (default: FARGATE for backwards compatibility)
+    launch_type = config.get('launch_type', 'FARGATE').upper()
+    
+    # Validate launch_type
+    valid_launch_types = ['FARGATE', 'EC2']
+    if launch_type not in valid_launch_types:
+        raise ValidationError(f"Invalid launch_type: {launch_type}. Must be one of {valid_launch_types}")
+    
+    # Validate network_mode for EC2 (Fargate only supports awsvpc)
+    network_mode = config.get('network_mode', 'awsvpc').lower()
+    valid_network_modes = ['awsvpc', 'bridge', 'host', 'none']
+    if network_mode not in valid_network_modes:
+        raise ValidationError(f"Invalid network_mode: {network_mode}. Must be one of {valid_network_modes}")
+    
+    if launch_type == 'FARGATE' and network_mode != 'awsvpc':
+        raise ValidationError(f"Fargate only supports 'awsvpc' network mode, got: {network_mode}")
+    
     # Validate CPU and memory values
     cpu = config.get('cpu', 256)
     memory = config.get('memory', 512)
     
-    valid_cpu_values = [256, 512, 1024, 2048, 4096]
-    if cpu not in valid_cpu_values:
-        raise ValidationError(f"Invalid CPU value: {cpu}. Must be one of {valid_cpu_values}")
-    
-    # Validate memory based on CPU
-    valid_memory_for_cpu = {
-        256: [512, 1024, 2048],
-        512: [1024, 2048, 3072, 4096],
-        1024: [2048, 3072, 4096, 5120, 6144, 7168, 8192],
-        2048: list(range(4096, 16385, 1024)),
-        4096: list(range(8192, 30721, 1024))
-    }
-    
-    if memory not in valid_memory_for_cpu.get(cpu, []):
-        raise ValidationError(f"Invalid memory value {memory} for CPU {cpu}")
+    if launch_type == 'FARGATE':
+        # Fargate has strict CPU/memory requirements
+        valid_cpu_values = [256, 512, 1024, 2048, 4096]
+        if cpu not in valid_cpu_values:
+            raise ValidationError(f"Invalid CPU value: {cpu}. Must be one of {valid_cpu_values}")
+        
+        # Validate memory based on CPU
+        valid_memory_for_cpu = {
+            256: [512, 1024, 2048],
+            512: [1024, 2048, 3072, 4096],
+            1024: [2048, 3072, 4096, 5120, 6144, 7168, 8192],
+            2048: list(range(4096, 16385, 1024)),
+            4096: list(range(8192, 30721, 1024))
+        }
+        
+        if memory not in valid_memory_for_cpu.get(cpu, []):
+            raise ValidationError(f"Invalid memory value {memory} for CPU {cpu}")
+    else:
+        # EC2 has more flexible CPU/memory - just validate they're positive if provided
+        if cpu is not None and (not isinstance(cpu, int) or cpu <= 0):
+            raise ValidationError(f"Invalid CPU value: {cpu}. Must be a positive integer.")
+        if memory is not None and (not isinstance(memory, int) or memory <= 0):
+            raise ValidationError(f"Invalid memory value: {memory}. Must be a positive integer.")
 
 def load_and_validate_config(yaml_file_path: str) -> Dict[str, Any]:
     """Load and validate YAML configuration"""
@@ -133,15 +158,27 @@ class ContainerBuilder:
         }
     
     def build_port_mappings(self, main_port: Optional[int], 
-                           additional_ports: List[Dict[str, int]], app_protocol: str = "http") -> List[Dict[str, Any]]:
-        """Build port mappings configuration"""
+                           additional_ports: List[Dict[str, int]], app_protocol: str = "http",
+                           network_mode: str = "awsvpc") -> List[Dict[str, Any]]:
+        """Build port mappings configuration
+        
+        Args:
+            main_port: Primary container port
+            additional_ports: List of additional port mappings
+            app_protocol: Application protocol (http, grpc, tcp)
+            network_mode: Network mode (awsvpc, bridge, host, none)
+        """
         port_mappings = []
+        
+        # For bridge mode, hostPort can be 0 (dynamic) or different from containerPort
+        # For awsvpc/host modes, hostPort must equal containerPort
+        use_dynamic_host_port = network_mode == 'bridge'
         
         if main_port:
             port_mapping = {
                 "name": "default",
                 "containerPort": main_port,
-                "hostPort": main_port,
+                "hostPort": 0 if use_dynamic_host_port else main_port,
                 "protocol": "tcp"
             }
             if app_protocol != "tcp":
@@ -154,14 +191,14 @@ class ContainerBuilder:
                     port_mapping = {
                         "name": name,
                         "containerPort": port,
-                        "hostPort": port,
+                        "hostPort": 0 if use_dynamic_host_port else port,
                         "protocol": "tcp"
                     }
                     if app_protocol != "tcp":
                         port_mapping["appProtocol"] = app_protocol
                     port_mappings.append(port_mapping)
         
-        self.logger.debug(f"Built {len(port_mappings)} port mappings")
+        self.logger.debug(f"Built {len(port_mappings)} port mappings (network_mode={network_mode})")
         return port_mappings
 
 class SecretManager:
@@ -422,8 +459,182 @@ def build_init_containers(config, secret_files, cluster_name, app_name, aws_regi
     
     return container_definitions
 
-def build_app_container(config, image_uri, environment, secrets, health, cluster_name, app_name, aws_region, use_fluent_bit, has_secret_files, secrets_files_path="/etc/secrets"):
-    """Build the main application container"""
+def build_linux_parameters(config: Dict[str, Any], launch_type: str = "FARGATE") -> Optional[Dict[str, Any]]:
+    """Build linuxParameters for container definition
+    
+    Args:
+        config: The YAML configuration dictionary
+        launch_type: Launch type (FARGATE or EC2)
+    
+    Returns:
+        Dict with linuxParameters or None if not configured
+    """
+    linux_params = config.get('linux_parameters', {})
+    if not linux_params:
+        return None
+    
+    linux_parameters = {}
+    
+    # Parameters supported by both Fargate and EC2
+    init_process_enabled = linux_params.get('init_process_enabled')
+    if init_process_enabled is not None:
+        linux_parameters["initProcessEnabled"] = bool(init_process_enabled)
+        logger.info(f"Set initProcessEnabled to {bool(init_process_enabled)}")
+    
+    # Capabilities (add/drop) - supported by both Fargate and EC2
+    capabilities = linux_params.get('capabilities', {})
+    if capabilities:
+        caps = {}
+        if 'add' in capabilities and capabilities['add']:
+            caps["add"] = list(capabilities['add'])
+        if 'drop' in capabilities and capabilities['drop']:
+            caps["drop"] = list(capabilities['drop'])
+        if caps:
+            linux_parameters["capabilities"] = caps
+            logger.info(f"Set capabilities: add={caps.get('add', [])}, drop={caps.get('drop', [])}")
+    
+    # tmpfs mounts - supported by both Fargate and EC2
+    tmpfs_config = linux_params.get('tmpfs', [])
+    if tmpfs_config:
+        tmpfs_mounts = []
+        for mount in tmpfs_config:
+            container_path = mount.get('container_path') or '/tmp'
+            raw_size = mount.get('size', 64)
+            try:
+                size = int(raw_size)
+            except (TypeError, ValueError):
+                raise ValidationError(f"Invalid tmpfs size '{raw_size}' for mount {mount!r}. Size must be a positive integer.")
+            if size <= 0:
+                raise ValidationError(f"Invalid tmpfs size '{raw_size}' for mount {mount!r}. Size must be a positive integer greater than zero.")
+            tmpfs_mount = {
+                "containerPath": mount.get('container_path', '/tmp'),
+                "size": size
+            }
+            mount_options = mount.get('mount_options', [])
+            if mount_options:
+                tmpfs_mount["mountOptions"] = list(mount_options)
+            tmpfs_mounts.append(tmpfs_mount)
+        if tmpfs_mounts:
+            linux_parameters["tmpfs"] = tmpfs_mounts
+            logger.info(f"Set {len(tmpfs_mounts)} tmpfs mounts")
+    
+    # swappiness - supported by Fargate (1.4.0+) and EC2
+    swappiness = linux_params.get('swappiness')
+    if swappiness is not None:
+        try:
+            swappiness_int = int(swappiness)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(
+                f"Invalid swappiness value {swappiness!r}; must be an integer between 0 and 100."
+            ) from exc
+        if not 0 <= swappiness_int <= 100:
+            raise ValidationError(
+                f"Invalid swappiness value {swappiness_int}; must be between 0 and 100."
+            )
+        linux_parameters["swappiness"] = swappiness_int
+        logger.info(f"Set swappiness to {swappiness_int}")
+    
+    # maxSwap - supported by Fargate (1.4.0+) and EC2
+    max_swap = linux_params.get('max_swap')
+    if max_swap is not None:
+        try:
+            max_swap_int = int(max_swap)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(
+                f"Invalid maxSwap value {max_swap!r}; must be a non-negative integer."
+            ) from exc
+        if max_swap_int < 0:
+            raise ValidationError(
+                f"Invalid maxSwap value {max_swap_int}; must be a non-negative integer."
+            )
+        linux_parameters["maxSwap"] = max_swap_int
+        logger.info(f"Set maxSwap to {max_swap_int}")
+    
+    # EC2-only parameters
+    shared_memory_size = linux_params.get('shared_memory_size')
+    if shared_memory_size is not None:
+        if launch_type == 'FARGATE':
+            logger.warning(f"shared_memory_size is EC2-only, ignoring for Fargate launch type")
+        else:
+            try:
+                shared_memory_size_int = int(shared_memory_size)
+            except (TypeError, ValueError) as exc:
+                raise ValidationError(
+                    f"Invalid shared_memory_size '{shared_memory_size}': must be a positive integer"
+                ) from exc
+            if shared_memory_size_int <= 0:
+                raise ValidationError(
+                    f"Invalid shared_memory_size '{shared_memory_size}': must be a positive integer"
+                )
+            linux_parameters["sharedMemorySize"] = shared_memory_size_int
+            logger.info(f"Set sharedMemorySize to {shared_memory_size_int} MiB")
+    
+    # devices - EC2 only (for GPU, etc.)
+    devices_config = linux_params.get('devices', [])
+    if devices_config:
+        if launch_type == 'FARGATE':
+            logger.warning(f"devices is EC2-only, ignoring for Fargate launch type")
+        else:
+            devices = []
+            for device in devices_config:
+                host_path = device.get('host_path')
+                if not host_path:
+                    raise ValidationError(
+                        "Each entry in linux_parameters.devices must include a non-empty 'host_path'. "
+                        f"Invalid device mapping: {device}"
+                    )
+                container_path = device.get('container_path', host_path)
+                permissions = device.get('permissions', ['read', 'write'])
+                device_mapping = {
+                    "hostPath": host_path,
+                    "containerPath": container_path,
+                    "permissions": permissions,
+                }
+                devices.append(device_mapping)
+            if devices:
+                linux_parameters["devices"] = devices
+                logger.info(f"Set {len(devices)} device mappings")
+    
+    return linux_parameters if linux_parameters else None
+
+def build_app_container(config, image_uri, environment, secrets, health, cluster_name, app_name, aws_region, use_fluent_bit, has_secret_files, secrets_files_path="/etc/secrets", network_mode="awsvpc", launch_type="FARGATE"):
+    """
+    Build the main application container definition for the ECS task.
+
+    Args:
+        config: Application configuration dictionary used to derive container
+            properties such as command, entryPoint, ports, and linux parameters.
+        image_uri: Full URI of the container image to run.
+        environment: List of environment variable definitions to inject into
+            the container.
+        secrets: List of secret definitions to inject into the container.
+        health: Optional health check configuration dictionary. If provided,
+            it is added as the container's ``healthCheck``.
+        cluster_name: Name of the ECS cluster used for log configuration and
+            other contextual metadata.
+        app_name: Logical name of the application, used for log configuration
+            and identifying the container.
+        aws_region: AWS region where the task definition will be used.
+        use_fluent_bit: If True, configures the container to use a FireLens
+            (fluent-bit) sidecar for logging; otherwise uses awslogs directly.
+        has_secret_files: If True, mounts a shared volume at
+            ``secrets_files_path`` and adds a dependency on the init container
+            that populates secret files.
+        secrets_files_path: Container path where secret files should be
+            mounted when ``has_secret_files`` is True. Defaults to
+            ``"/etc/secrets"``.
+        network_mode: The network mode of the task (for example ``"awsvpc"``
+            or ``"bridge"``). Used when building port mappings to ensure they
+            are compatible with the task's networking configuration.
+        launch_type: The ECS launch type for the task (for example
+            ``"FARGATE"`` or ``"EC2"``). Passed through to
+            :func:`build_linux_parameters` to determine which Linux-specific
+            parameters are valid.
+
+    Returns:
+        A dictionary describing the main application container suitable for
+        inclusion in an ECS task definition.
+    """
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
     stop_timeout = config.get('stop_timeout')
@@ -462,9 +673,14 @@ def build_app_container(config, image_uri, environment, secrets, health, cluster
     additional_ports = config.get('additional_ports', [])
     app_protocol = config.get('app_protocol', 'http')
     
-    port_mappings = container_builder.build_port_mappings(main_port, additional_ports, app_protocol)
+    port_mappings = container_builder.build_port_mappings(main_port, additional_ports, app_protocol, network_mode)
     if port_mappings:
         app_container["portMappings"] = port_mappings
+    
+    # Add linuxParameters if configured
+    linux_parameters = build_linux_parameters(config, launch_type)
+    if linux_parameters:
+        app_container["linuxParameters"] = linux_parameters
     
     # Add mount points if using shared volume
     if has_secret_files:
@@ -748,6 +964,12 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
     
     logger.info(f"Setting container image to: {image_uri}")
     
+    # Get launch type and network mode (defaults for backwards compatibility)
+    launch_type = config.get('launch_type', 'FARGATE').upper()
+    network_mode = config.get('network_mode', 'awsvpc').lower()
+    
+    logger.info(f"Launch type: {launch_type}, Network mode: {network_mode}")
+    
     # Create the container definitions list
     container_definitions = []
     
@@ -756,7 +978,7 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
     container_definitions.extend(init_containers)
 
     # Add the main application container
-    app_container = build_app_container(config, image_uri, environment, secrets, health, cluster_name, app_name, aws_region, use_fluent_bit, has_secret_files, secrets_files_path)
+    app_container = build_app_container(config, image_uri, environment, secrets, health, cluster_name, app_name, aws_region, use_fluent_bit, has_secret_files, secrets_files_path, network_mode, launch_type)
     container_definitions.append(app_container)
 
     # Add fluent-bit sidecar container if enabled
@@ -774,18 +996,21 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
         "containerDefinitions": container_definitions,
         "cpu": cpu,
         "memory": memory,
-        "runtimePlatform": {
-            "cpuArchitecture": cpu_arch,
-            "operatingSystemFamily": "LINUX"
-        },
         "family": f"{cluster_name}_{app_name}",
         "taskRoleArn": config.get('role_arn', ''),
         "executionRoleArn": config.get('role_arn', ''),
-        "networkMode": "awsvpc",
+        "networkMode": network_mode,
         "requiresCompatibilities": [
-            "FARGATE"
+            launch_type
         ]
     }
+    
+    # Add runtimePlatform only for Fargate (required for Fargate, not needed for EC2)
+    if launch_type == 'FARGATE':
+        task_definition["runtimePlatform"] = {
+            "cpuArchitecture": cpu_arch,
+            "operatingSystemFamily": "LINUX"
+        }
     
     # Add ephemeral storage if specified
     ephemeral_storage = config.get('ephemeral_storage')

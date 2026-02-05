@@ -1,0 +1,36 @@
+# EC2 Linux Parameters Test
+# Tests EC2 launch type with full linux_parameters support including EC2-only options
+name: ec2-linux-params-app
+replica_count: 1
+cpu: 2048
+memory: 4096
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+
+# EC2 launch type
+launch_type: EC2
+network_mode: awsvpc
+
+port: 8080
+
+# Linux parameters with EC2-only features
+linux_parameters:
+  init_process_enabled: true
+  shared_memory_size: 256
+  capabilities:
+    add:
+      - SYS_PTRACE
+    drop:
+      - NET_RAW
+  tmpfs:
+    - container_path: /tmp
+      size: 128
+      mount_options:
+        - noexec
+        - nosuid
+  devices:
+    - host_path: /dev/nvidia0
+      container_path: /dev/nvidia0
+      permissions:
+        - read
+        - write
+        - mknod

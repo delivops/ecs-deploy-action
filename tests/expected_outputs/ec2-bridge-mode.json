@@ -1,0 +1,53 @@
+{
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-app:latest",
+      "essential": true,
+      "environment": [],
+      "command": [],
+      "entryPoint": [],
+      "secrets": [],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/test-cluster/test-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "/default"
+        }
+      },
+      "portMappings": [
+        {
+          "name": "default",
+          "containerPort": 8080,
+          "hostPort": 0,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        },
+        {
+          "name": "metrics",
+          "containerPort": 9090,
+          "hostPort": 0,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        },
+        {
+          "name": "health",
+          "containerPort": 8081,
+          "hostPort": 0,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ]
+    }
+  ],
+  "cpu": "1024",
+  "memory": "2048",
+  "family": "test-cluster_test-service",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "networkMode": "bridge",
+  "requiresCompatibilities": [
+    "EC2"
+  ]
+}
