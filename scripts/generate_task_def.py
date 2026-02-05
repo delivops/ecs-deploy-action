@@ -556,8 +556,18 @@ def build_linux_parameters(config: Dict[str, Any], launch_type: str = "FARGATE")
         if launch_type == 'FARGATE':
             logger.warning(f"shared_memory_size is EC2-only, ignoring for Fargate launch type")
         else:
-            linux_parameters["sharedMemorySize"] = int(shared_memory_size)
-            logger.info(f"Set sharedMemorySize to {shared_memory_size} MiB")
+            try:
+                shared_memory_size_int = int(shared_memory_size)
+            except (TypeError, ValueError) as exc:
+                raise ValidationError(
+                    f"Invalid shared_memory_size '{shared_memory_size}': must be a positive integer"
+                ) from exc
+            if shared_memory_size_int <= 0:
+                raise ValidationError(
+                    f"Invalid shared_memory_size '{shared_memory_size}': must be a positive integer"
+                )
+            linux_parameters["sharedMemorySize"] = shared_memory_size_int
+            logger.info(f"Set sharedMemorySize to {shared_memory_size_int} MiB")
     
     # devices - EC2 only (for GPU, etc.)
     devices_config = linux_params.get('devices', [])
