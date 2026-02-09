@@ -638,7 +638,6 @@ def build_app_container(config, image_uri, environment, secrets, health, cluster
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
     stop_timeout = config.get('stop_timeout')
-    readonly_root_filesystem = config.get('readonly_root_filesystem')
     
     container_builder = ContainerBuilder(cluster_name, app_name, aws_region)
     
@@ -655,10 +654,6 @@ def build_app_container(config, image_uri, environment, secrets, health, cluster
     # Add stopTimeout if specified
     if stop_timeout is not None:
         app_container["stopTimeout"] = int(stop_timeout)
-    
-    # Add readonlyRootFilesystem if specified
-    if readonly_root_filesystem is not None:
-        app_container["readonlyRootFilesystem"] = bool(readonly_root_filesystem)
     
     # Set logConfiguration for app container
     if use_fluent_bit:
@@ -995,6 +990,12 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
     if otel_collector_image is not None:
         otel_container = build_otel_container(config, otel_collector_image, otel_is_custom_image, otel_collector_ssm, otel_extra_config, otel_metrics_port, otel_metrics_path, app_name, cluster_name, aws_region)
         container_definitions.append(otel_container)
+    
+    # Apply readonlyRootFilesystem to ALL containers if specified
+    readonly_root_filesystem = config.get('readonly_root_filesystem')
+    if readonly_root_filesystem is not None:
+        for container in container_definitions:
+            container["readonlyRootFilesystem"] = bool(readonly_root_filesystem)
     
     # Create the complete task definition
     task_definition = {
