@@ -43,6 +43,10 @@ entrypoint: ["/usr/local/bin/docker-entrypoint.sh"]
 # if it doesn't exit normally on its own
 stop_timeout: 30
 
+# Read-only root filesystem (optional, default: not set)
+# When true, the container's root filesystem is mounted as read-only
+readonly_root_filesystem: true
+
 # Health check configuration
 health_check:
   command: "curl -f http://localhost:8080/health || exit 1"

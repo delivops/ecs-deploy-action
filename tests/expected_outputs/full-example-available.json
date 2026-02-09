@@ -148,6 +148,7 @@
           "appProtocol": "http"
         }
       ],
+      "readonlyRootFilesystem": true,
       "mountPoints": [
         {
           "sourceVolume": "shared-volume",

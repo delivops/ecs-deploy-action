@@ -1,0 +1,19 @@
+# Read-Only Root Filesystem Example
+# Tests the readonly_root_filesystem field which sets readonlyRootFilesystem in the ECS task definition
+
+name: readonly-root-fs-app
+replica_count: 1
+cpu: 256
+memory: 512
+cpu_arch: ARM64
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+
+# When true, the container's root filesystem is mounted as read-only
+readonly_root_filesystem: true
+
+# Basic configuration
+port: 8080
+envs:
+  - NODE_ENV: production
+
+command: ["npm", "start"]
