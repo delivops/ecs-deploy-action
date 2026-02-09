@@ -638,6 +638,7 @@ def build_app_container(config, image_uri, environment, secrets, health, cluster
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
     stop_timeout = config.get('stop_timeout')
+    readonly_root_filesystem = config.get('readonly_root_filesystem')
     
     container_builder = ContainerBuilder(cluster_name, app_name, aws_region)
     
@@ -654,6 +655,10 @@ def build_app_container(config, image_uri, environment, secrets, health, cluster
     # Add stopTimeout if specified
     if stop_timeout is not None:
         app_container["stopTimeout"] = int(stop_timeout)
+    
+    # Add readonlyRootFilesystem if specified
+    if readonly_root_filesystem is not None:
+        app_container["readonlyRootFilesystem"] = bool(readonly_root_filesystem)
     
     # Set logConfiguration for app container
     if use_fluent_bit:

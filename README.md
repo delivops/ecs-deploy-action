@@ -185,3 +185,71 @@ All infrastructure (EventBridge rules, schedules, network configuration, IAM rol
 ## License
 
 This project is maintained by [DelivOps](https://delivops.com).
+
+<start dynamic>
+## 📋 Complete YAML Configuration Example
+```yaml
+additional_ports:
+- metrics: 9090
+- health: 8081
+app_protocol: example-app-protocol
+command:
+- npm
+- start
+cpu: 1024
+cpu_arch: X86_64
+entrypoint:
+- /usr/local/bin/docker-entrypoint.sh
+envs:
+- NODE_ENV: production
+- API_VERSION: v1
+- LOG_LEVEL: info
+- MAX_CONNECTIONS: 100
+- ENABLE_METRICS: true
+ephemeral_storage: example-ephemeral-storage
+fluent_bit_collector:
+  image_name: fluent-bit:2.1.0
+  extra_config: custom-fluent-bit.conf
+  ecs_log_metadata: 'true'
+health_check:
+  command: curl -f http://localhost:8080/health || exit 1
+  interval: 30
+  timeout: 5
+  retries: 3
+  start_period: 60
+launch_type: example-launch-type
+linux_parameters: example-linux-parameters
+memory: 2048
+network_mode: example-network-mode
+otel_collector:
+  image_name: my-custom-otel-collector:v1.0.0
+  extra_config: otel-config.yaml
+  ssm_name: my-app-otel-config.yaml
+  metrics_port: 8888
+  metrics_path: /metrics
+port: 8080
+readonly_root_filesystem: example-readonly-root-filesystem
+replica_count: 3
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+secret_files:
+- ssl-certificate
+- private-key
+- config-file
+secrets:
+- DATABASE_PASSWORD: arn:aws:secretsmanager:us-east-1:123456789012:secret:db-password
+- API_KEY: arn:aws:secretsmanager:us-east-1:123456789012:secret:api-key
+secrets_envs:
+- id: arn:aws:secretsmanager:us-east-1:123456789012:secret:app-secrets-abc123
+  values:
+  - DATABASE_PASSWORD
+  - API_KEY
+  - JWT_SECRET
+secrets_files_path: example-secrets-files-path
+stop_timeout: example-stop-timeout
+```
+
+## 🔧 Generated Task Definition
+```json
+# Error generating task definition
+```
+<end dynamic>
