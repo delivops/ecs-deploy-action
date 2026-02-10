@@ -16,7 +16,6 @@
       ],
       "entryPoint": [],
       "secrets": [],
-      "readonlyRootFilesystem": true,
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
@@ -33,6 +32,17 @@
           "protocol": "tcp",
           "appProtocol": "http"
         }
+      ],
+      "readonlyRootFilesystem": true,
+      "mountPoints": [
+        {
+          "sourceVolume": "writable-tmp",
+          "containerPath": "/tmp"
+        },
+        {
+          "sourceVolume": "writable-var-run",
+          "containerPath": "/var/run"
+        }
       ]
     }
   ],
@@ -48,5 +58,15 @@
   "runtimePlatform": {
     "cpuArchitecture": "ARM64",
     "operatingSystemFamily": "LINUX"
-  }
+  },
+  "volumes": [
+    {
+      "name": "writable-tmp",
+      "host": {}
+    },
+    {
+      "name": "writable-var-run",
+      "host": {}
+    }
+  ]
 }

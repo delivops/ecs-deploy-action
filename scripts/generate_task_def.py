@@ -957,6 +957,16 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
             "name": "shared-volume",
             "host": {}
         })
+    
+    # Create volumes for writable directories (needed when readonlyRootFilesystem is true)
+    writable_dirs = config.get('writable_dirs', [])
+    for dir_path in writable_dirs:
+        # Generate volume name from path: /tmp -> writable-tmp, /var/run -> writable-var-run
+        vol_name = "writable-" + dir_path.strip("/").replace("/", "-")
+        volumes.append({
+            "name": vol_name,
+            "host": {}
+        })
 
     # Sanitize image_name and tag for ECR URI
     image_name_clean, tag_clean = parse_image_parts(image_name, tag)
@@ -997,6 +1007,18 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
         for container in container_definitions:
             container["readonlyRootFilesystem"] = bool(readonly_root_filesystem)
     
+    # Add writable_dirs mountPoints to ALL containers if specified
+    if writable_dirs:
+        for container in container_definitions:
+            if "mountPoints" not in container:
+                container["mountPoints"] = []
+            for dir_path in writable_dirs:
+                vol_name = "writable-" + dir_path.strip("/").replace("/", "-")
+                container["mountPoints"].append({
+                    "sourceVolume": vol_name,
+                    "containerPath": dir_path
+                })
+    
     # Create the complete task definition
     task_definition = {
         "containerDefinitions": container_definitions,
@@ -1027,7 +1049,7 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
         logger.info(f"Set ephemeral storage size to {ephemeral_storage} GiB")
     
     # Add volumes if needed
-    if has_secret_files and volumes:
+    if volumes:
         task_definition["volumes"] = volumes
     
     return task_definition

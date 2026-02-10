@@ -11,6 +11,12 @@ role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
 # When true, the container's root filesystem is mounted as read-only
 readonly_root_filesystem: true
 
+# Writable directories (needed when readonly_root_filesystem is true)
+# Creates empty Docker volumes mounted into all containers at these paths
+writable_dirs:
+  - /tmp
+  - /var/run
+
 # Basic configuration
 port: 8080
 envs:

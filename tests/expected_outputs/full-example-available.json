@@ -25,6 +25,14 @@
         {
           "sourceVolume": "shared-volume",
           "containerPath": "/etc/secrets"
+        },
+        {
+          "sourceVolume": "writable-tmp",
+          "containerPath": "/tmp"
+        },
+        {
+          "sourceVolume": "writable-var-run",
+          "containerPath": "/var/run"
         }
       ],
       "logConfiguration": {
@@ -149,11 +157,18 @@
           "appProtocol": "http"
         }
       ],
-      "readonlyRootFilesystem": true,
       "mountPoints": [
         {
           "sourceVolume": "shared-volume",
           "containerPath": "/etc/secrets"
+        },
+        {
+          "sourceVolume": "writable-tmp",
+          "containerPath": "/tmp"
+        },
+        {
+          "sourceVolume": "writable-var-run",
+          "containerPath": "/var/run"
         }
       ],
       "dependsOn": [
@@ -165,7 +180,8 @@
           "containerName": "fluent-bit",
           "condition": "START"
         }
-      ]
+      ],
+      "readonlyRootFilesystem": true
     },
     {
       "name": "fluent-bit",
@@ -207,7 +223,17 @@
           "enable-ecs-log-metadata": "true"
         }
       },
-      "readonlyRootFilesystem": true
+      "readonlyRootFilesystem": true,
+      "mountPoints": [
+        {
+          "sourceVolume": "writable-tmp",
+          "containerPath": "/tmp"
+        },
+        {
+          "sourceVolume": "writable-var-run",
+          "containerPath": "/var/run"
+        }
+      ]
     },
     {
       "name": "otel-collector",
@@ -254,15 +280,21 @@
           "value": "test-service"
         }
       ],
-      "readonlyRootFilesystem": true
+      "readonlyRootFilesystem": true,
+      "mountPoints": [
+        {
+          "sourceVolume": "writable-tmp",
+          "containerPath": "/tmp"
+        },
+        {
+          "sourceVolume": "writable-var-run",
+          "containerPath": "/var/run"
+        }
+      ]
     }
   ],
   "cpu": "1024",
   "memory": "2048",
-  "runtimePlatform": {
-    "cpuArchitecture": "X86_64",
-    "operatingSystemFamily": "LINUX"
-  },
   "family": "test-cluster_test-service",
   "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
   "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
@@ -270,9 +302,21 @@
   "requiresCompatibilities": [
     "FARGATE"
   ],
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
   "volumes": [
     {
       "name": "shared-volume",
+      "host": {}
+    },
+    {
+      "name": "writable-tmp",
+      "host": {}
+    },
+    {
+      "name": "writable-var-run",
       "host": {}
     }
   ]

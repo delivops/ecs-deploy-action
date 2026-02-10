@@ -246,6 +246,7 @@ secrets_envs:
   - JWT_SECRET
 secrets_files_path: example-secrets-files-path
 stop_timeout: example-stop-timeout
+writable_dirs: example-writable-dirs
 ```
 
 ## 🔧 Generated Task Definition
