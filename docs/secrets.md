@@ -5,6 +5,7 @@ You can inject secrets from AWS Secrets Manager as environment variables or down
 - `secrets`: Classic format, map env var to secret ARN
 - `secrets_envs`: Grouped format, reference multiple keys from one secret
 - `secrets_envs` (name-only): Auto-extract all keys from a secret as environment variables
+- `secrets_envs` (single env mode): Inject the full secret into one env var
 - `secret_files`: List of secret files to download to `/etc/secrets/`
 
 See the [full YAML example](../README.md#complete-yaml-configuration-example) for usage.
@@ -30,6 +31,25 @@ secrets_envs:
       - DATABASE_PASSWORD
       - API_KEY
 ```
+
+## Single Env Mode (Disable Auto-Parse)
+
+Use this when you want the full secret in one environment variable instead of parsing keys.
+
+```yaml
+secrets_envs:
+  - name: creds
+    auto_parse_keys_to_envs: false
+    env_name: MY_CREDENTIALS
+```
+
+Rules:
+
+1. `auto_parse_keys_to_envs` defaults to `true`
+2. If `auto_parse_keys_to_envs: false`, `env_name` is required
+3. If `id` is provided, it is used directly as `valueFrom`
+4. If only `name` is provided, the full secret ARN is resolved automatically
+5. `env_name` is ignored when `auto_parse_keys_to_envs: true`
 
 ## Secret Names Format (Auto-Discover Keys at Build Time)
 
@@ -88,6 +108,10 @@ The generated task definition will contain:
 - **Standard ECS Format**: Uses native ECS secrets injection (no custom containers)
 - **Better Performance**: No runtime overhead or init containers needed
 - **AWS Best Practices**: Follows standard AWS ECS secrets management patterns
+
+## Mixing `secrets` and `secrets_envs`
+
+Both formats are processed together. If two entries generate the same environment variable name, generation fails with a validation error.
 
 ## Secret Files
 

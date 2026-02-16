@@ -16,54 +16,56 @@ from pathlib import Path
 from typing import Dict, Any, List, Set, Union
 
 def analyze_generate_script():
-    """Analyze generate_task_def.py to discover all possible YAML configuration fields."""
-    
-    script_path = 'scripts/generate_task_def.py'
-    with open(script_path, 'r') as f:
-        content = f.read()
-    
-    # Parse the AST
-    tree = ast.parse(content)
-    
+    """Analyze task definition modules to discover YAML configuration fields."""
+
+    module_paths = sorted(Path('scripts/task_def').rglob('*.py'))
     discovered_fields = {}
-    
-    # Find all config.get() calls with their default values
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            if (isinstance(node.func, ast.Attribute) and 
-                isinstance(node.func.value, ast.Name) and 
-                node.func.value.id == 'config' and 
-                node.func.attr == 'get'):
-                
-                if node.args and isinstance(node.args[0], ast.Constant):
-                    field_name = node.args[0].value
-                    
-                    # Get default value if provided
-                    default_value = None
-                    if len(node.args) > 1:
-                        default_value = ast.literal_eval(node.args[1]) if isinstance(node.args[1], (ast.Constant, ast.List, ast.Dict)) else None
-                    
-                    discovered_fields[field_name] = default_value
-    
-    # Also find direct config['field'] access
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Subscript):
-            if (isinstance(node.value, ast.Name) and 
-                node.value.id == 'config' and 
-                isinstance(node.slice, ast.Constant)):
-                
-                field_name = node.slice.value
-                if field_name not in discovered_fields:
-                    discovered_fields[field_name] = None
+
+    for module_path in module_paths:
+        with open(module_path, 'r') as f:
+            content = f.read()
+
+        tree = ast.parse(content)
+
+        # Find all config.get() calls with their default values
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if (isinstance(node.func, ast.Attribute) and
+                    isinstance(node.func.value, ast.Name) and
+                    node.func.value.id == 'config' and
+                    node.func.attr == 'get'):
+
+                    if node.args and isinstance(node.args[0], ast.Constant):
+                        field_name = node.args[0].value
+
+                        # Get default value if provided
+                        default_value = None
+                        if len(node.args) > 1:
+                            default_value = ast.literal_eval(node.args[1]) if isinstance(node.args[1], (ast.Constant, ast.List, ast.Dict)) else None
+
+                        discovered_fields[field_name] = default_value
+
+        # Also find direct config['field'] access
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Subscript):
+                if (isinstance(node.value, ast.Name) and
+                    node.value.id == 'config' and
+                    isinstance(node.slice, ast.Constant)):
+
+                    field_name = node.slice.value
+                    if field_name not in discovered_fields:
+                        discovered_fields[field_name] = None
     
     return discovered_fields
 
 def infer_field_types_and_examples():
     """Infer appropriate example values for each field based on code analysis."""
-    
-    script_path = 'scripts/generate_task_def.py'
-    with open(script_path, 'r') as f:
-        content = f.read()
+
+    module_paths = sorted(Path('scripts/task_def').rglob('*.py'))
+    content = ""
+    for module_path in module_paths:
+        with open(module_path, 'r') as f:
+            content += f.read() + "\n"
     
     field_examples = {}
     
@@ -111,6 +113,11 @@ def infer_field_types_and_examples():
             {
                 'id': 'arn:aws:secretsmanager:us-east-1:123456789012:secret:app-secrets-abc123',
                 'values': ['DATABASE_PASSWORD', 'API_KEY', 'JWT_SECRET']
+            },
+            {
+                'name': 'app-credentials',
+                'auto_parse_keys_to_envs': False,
+                'env_name': 'APP_CREDENTIALS'
             }
         ],
         
@@ -158,7 +165,7 @@ def create_comprehensive_yaml():
         'name'  # Only used as fallback when service_name is not provided, but service_name is always provided by the action
     }
     
-    print(f"🔍 Discovered {len(discovered_fields)} configuration fields from generate_task_def.py")
+    print(f"🔍 Discovered {len(discovered_fields)} configuration fields from scripts/task_def modules")
     
     # Create comprehensive example
     yaml_example = {}
