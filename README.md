@@ -167,7 +167,47 @@ The action uses a simplified YAML configuration file for task definitions. See t
 - OpenTelemetry and Fluent Bit integration
 - [EC2 launch type support](./docs/ec2-launch-type.md) (with bridge/host network modes)
 - [Linux parameters](./docs/linux-parameters.md) (init process, capabilities, shared memory, devices)
+- Multi-service YAML configuration
 - And more
+
+### Multi-Service YAML
+
+You can use a single YAML file for multiple services by defining shared defaults at the top level and service-specific overrides in a `services_overrides` section:
+
+```yaml
+# Base configuration (applied to all services)
+cpu: 256
+memory: 512
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+port: 8080
+envs:
+  - LOG_LEVEL: info
+  - SHARED_VAR: shared_value
+
+# Service-specific overrides
+services_overrides:
+  api-service:
+    cpu: 1024
+    memory: 2048
+    envs:
+      - API_MODE: "true"
+  worker-service:
+    cpu: 512
+    memory: 1024
+    port: null  # Remove port for workers
+    envs:
+      - WORKER_MODE: "true"
+```
+
+**Merge behavior:**
+| Field Type | Behavior |
+|------------|----------|
+| Scalars (`cpu`, `memory`, `port`) | Override replaces base value |
+| Arrays (`envs`, `secrets`, `command`) | Service values are appended to base |
+| Objects (`health_check`, `otel_collector`) | Service object completely replaces base |
+| Null values | Removes the field from configuration |
+
+The service name passed to the action (via `ecs_service` or `task_name`) determines which overrides are applied. Services not listed in `services_overrides` use the base configuration.
 
 ## Architecture
 
