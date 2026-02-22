@@ -97,7 +97,7 @@ runs:
       shell: bash
 
     # ECS Service Deployment
-    - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.4.0
+    - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.6.0
       if: ${{ inputs.deployment_type == 'service' && inputs.dry_run == 'false' }}
       id: ecs-deploy-service
       with:
