@@ -112,23 +112,123 @@ def validate_config(config: Dict[str, Any]) -> None:
         if memory is not None and (not isinstance(memory, int) or memory <= 0):
             raise ValidationError(f"Invalid memory value: {memory}. Must be a positive integer.")
 
-def load_and_validate_config(yaml_file_path: str) -> Dict[str, Any]:
-    """Load and validate YAML configuration"""
+# Fields that are arrays and should be extended (appended) during merge
+ARRAY_FIELDS = {
+    'command', 'entrypoint', 'envs', 'secrets', 'secrets_envs',
+    'secret_files', 'additional_ports', 'writable_dirs'
+}
+
+# Fields that are objects and use shallow merge (replace)
+OBJECT_FIELDS = {
+    'health_check', 'linux_parameters', 'otel_collector', 'fluent_bit_collector'
+}
+
+def merge_configs(base_config: Dict[str, Any], service_override: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Merge base configuration with service-specific overrides.
+
+    - Scalars: Override replaces base
+    - Arrays: Service values appended to base (extend)
+    - Objects: Service object completely replaces base (shallow merge)
+    """
+    # Start with a copy of base config (excluding services_overrides)
+    merged = {k: v for k, v in base_config.items() if k != 'services_overrides'}
+
+    for key, override_value in service_override.items():
+        if override_value is None:
+            # Explicit null removes the field
+            merged.pop(key, None)
+            continue
+
+        if key in ARRAY_FIELDS:
+            # Extend: append service array to base array
+            base_array = merged.get(key, [])
+            if isinstance(base_array, list) and isinstance(override_value, list):
+                merged[key] = base_array + override_value
+            else:
+                merged[key] = override_value
+        else:
+            # Scalars and objects: override replaces base
+            merged[key] = override_value
+
+    return merged
+
+def apply_service_overrides(raw_config: Dict[str, Any], service_name: Optional[str]) -> Dict[str, Any]:
+    """
+    Apply service-specific overrides to the base configuration.
+
+    If services_overrides exists and contains the service_name,
+    merge those overrides with the base config.
+    """
+    services_overrides = raw_config.get('services_overrides', {})
+
+    if not services_overrides:
+        # No overrides section - return config without services_overrides key
+        return {k: v for k, v in raw_config.items() if k != 'services_overrides'}
+
+    if not service_name:
+        logger.warning("services_overrides present but no service_name provided")
+        return {k: v for k, v in raw_config.items() if k != 'services_overrides'}
+
+    service_override = services_overrides.get(service_name, {})
+
+    if not service_override:
+        logger.info(f"No overrides found for service '{service_name}', using base config")
+        return {k: v for k, v in raw_config.items() if k != 'services_overrides'}
+
+    logger.info(f"Applying overrides for service '{service_name}': {list(service_override.keys())}")
+    return merge_configs(raw_config, service_override)
+
+def validate_services_overrides(config: Dict[str, Any]) -> None:
+    """Validate the services_overrides section if present"""
+    services_overrides = config.get('services_overrides')
+
+    if services_overrides is None:
+        return  # No overrides, nothing to validate
+
+    if not isinstance(services_overrides, dict):
+        raise ValidationError(
+            f"services_overrides must be a dictionary, got {type(services_overrides).__name__}"
+        )
+
+    for svc_name, overrides in services_overrides.items():
+        if not isinstance(svc_name, str):
+            raise ValidationError(
+                f"Service name in services_overrides must be a string, got {type(svc_name).__name__}"
+            )
+
+        if overrides is not None and not isinstance(overrides, dict):
+            raise ValidationError(
+                f"Overrides for service '{svc_name}' must be a dictionary, "
+                f"got {type(overrides).__name__}"
+            )
+
+def load_and_validate_config(yaml_file_path: str, service_name: Optional[str] = None) -> Dict[str, Any]:
+    """Load and validate YAML configuration, applying service overrides if present"""
     try:
         yaml_path = Path(yaml_file_path)
         if not yaml_path.exists():
             raise FileNotFoundError(f"YAML file not found: {yaml_file_path}")
-        
+
         with yaml_path.open('r') as file:
-            config = yaml.safe_load(file)
-        
-        if not config:
+            raw_config = yaml.safe_load(file)
+
+        if not raw_config:
             raise ValidationError("YAML file is empty or invalid")
-        
+
+        # Validate services_overrides structure before applying
+        validate_services_overrides(raw_config)
+
+        # Apply service-specific overrides if present
+        config = apply_service_overrides(raw_config, service_name)
+
+        # Validate the final merged config
         validate_config(config)
         logger.info(f"Successfully loaded and validated configuration from {yaml_file_path}")
+        if service_name and raw_config.get('services_overrides', {}).get(service_name):
+            logger.info(f"Applied overrides for service: {service_name}")
         return config
-        
+
     except yaml.YAMLError as e:
         raise ValidationError(f"Invalid YAML format: {e}")
 
@@ -869,7 +969,7 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
     if config_dict is None:
         if yaml_file_path is None:
             raise ValidationError("Either config_dict or yaml_file_path must be provided")
-        config = load_and_validate_config(yaml_file_path)
+        config = load_and_validate_config(yaml_file_path, service_name)
     else:
         config = config_dict
     
@@ -1113,7 +1213,7 @@ def main() -> None:
         logger = setup_logging(args.log_level)
         
         # Load and validate configuration
-        config = load_and_validate_config(args.yaml_file)
+        config = load_and_validate_config(args.yaml_file, args.service_name)
         
         if args.validate_only:
             logger.info("Configuration validation successful")
