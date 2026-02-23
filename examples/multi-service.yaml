@@ -6,6 +6,8 @@ cpu: 256
 memory: 512
 role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
 port: 8080
+min_replicas: 1
+max_replicas: 5
 envs:
   - LOG_LEVEL: info
   - SHARED_VAR: shared_value
@@ -15,6 +17,8 @@ services_overrides:
   api-service:
     cpu: 1024
     memory: 2048
+    min_replicas: 2
+    max_replicas: 10
     envs:
       - API_MODE: "true"
   worker-service:

@@ -7,6 +7,12 @@
 # Number of desired instances/replicas of this service
 replica_count: 3
 
+# Auto Scaling replica limits (optional)
+# min_replicas: Minimum number of tasks (defaults to 0 if only max_replicas is set)
+# max_replicas: Maximum number of tasks for auto scaling
+min_replicas: 2
+max_replicas: 10
+
 # CPU allocation (in CPU units: 256, 512, 1024, 2048, 4096)
 cpu: 1024
 

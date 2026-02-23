@@ -120,6 +120,22 @@ runs:
          fi
       shell: bash
 
+    # Update Auto Scaling limits if min/max replicas are configured
+    - id: update-autoscaling
+      if: ${{ inputs.deployment_type == 'service' && inputs.dry_run == 'false' && steps.generate-task-def.outputs.max_replicas != '' }}
+      run: |
+        echo "Updating Auto Scaling for service ${{ inputs.ecs_service }}..."
+        echo "  min_replicas: ${{ steps.generate-task-def.outputs.min_replicas }}"
+        echo "  max_replicas: ${{ steps.generate-task-def.outputs.max_replicas }}"
+        aws application-autoscaling register-scalable-target \
+          --service-namespace ecs \
+          --resource-id "service/${{ inputs.ecs_cluster }}/${{ inputs.ecs_service }}" \
+          --scalable-dimension "ecs:service:DesiredCount" \
+          --min-capacity ${{ steps.generate-task-def.outputs.min_replicas }} \
+          --max-capacity ${{ steps.generate-task-def.outputs.max_replicas }}
+        echo "✅ Auto Scaling updated successfully"
+      shell: bash
+
     # Scheduled Task / Triggerable Task Deployment
     - id: register-task-def
       if: ${{ (inputs.deployment_type == 'scheduled_task' || inputs.deployment_type == 'triggerable_task') && inputs.dry_run == 'false' }}

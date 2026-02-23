@@ -32,7 +32,9 @@ class TaskConfig:
     additional_ports: List[Dict[str, int]] = field(default_factory=list)
     role_arn: str = ""
     replica_count: str = ""
-    
+    min_replicas: str = ""
+    max_replicas: str = ""
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'TaskConfig':
         return cls(
@@ -45,7 +47,9 @@ class TaskConfig:
             port=data.get('port'),
             additional_ports=data.get('additional_ports', []),
             role_arn=data.get('role_arn', ''),
-            replica_count=data.get('replica_count', '')
+            replica_count=data.get('replica_count', ''),
+            min_replicas=data.get('min_replicas', ''),
+            max_replicas=data.get('max_replicas', '')
         )
 
 def setup_logging(level: str = "INFO") -> logging.Logger:
@@ -111,6 +115,40 @@ def validate_config(config: Dict[str, Any]) -> None:
             raise ValidationError(f"Invalid CPU value: {cpu}. Must be a positive integer.")
         if memory is not None and (not isinstance(memory, int) or memory <= 0):
             raise ValidationError(f"Invalid memory value: {memory}. Must be a positive integer.")
+
+    # Validate min_replicas and max_replicas if provided
+    min_replicas = config.get('min_replicas')
+    max_replicas = config.get('max_replicas')
+    replica_count = config.get('replica_count')
+
+    if min_replicas is not None:
+        if not isinstance(min_replicas, int) or min_replicas < 0:
+            raise ValidationError(f"Invalid min_replicas value: {min_replicas}. Must be a non-negative integer.")
+
+    if max_replicas is not None:
+        if not isinstance(max_replicas, int) or max_replicas < 1:
+            raise ValidationError(f"Invalid max_replicas value: {max_replicas}. Must be a positive integer.")
+
+    if min_replicas is not None and max_replicas is not None:
+        if min_replicas > max_replicas:
+            raise ValidationError(
+                f"min_replicas ({min_replicas}) cannot be greater than max_replicas ({max_replicas})."
+            )
+
+    if replica_count is not None and replica_count != '':
+        try:
+            rc = int(replica_count)
+        except (TypeError, ValueError):
+            rc = None
+        if rc is not None:
+            if min_replicas is not None and rc < min_replicas:
+                raise ValidationError(
+                    f"replica_count ({rc}) cannot be less than min_replicas ({min_replicas})."
+                )
+            if max_replicas is not None and rc > max_replicas:
+                raise ValidationError(
+                    f"replica_count ({rc}) cannot be greater than max_replicas ({max_replicas})."
+                )
 
 # Fields that are arrays and should be extended (appended) during merge
 ARRAY_FIELDS = {
@@ -1014,8 +1052,14 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
     else:
         health = None
     
-    # Extract replica_count for later use in the GitHub Action
+    # Extract replica_count and autoscaling limits for later use in the GitHub Action
     replica_count = config.get('replica_count', '')
+    max_replicas = config.get('max_replicas', '')
+    # Default min_replicas to 0 when only max_replicas is provided
+    if max_replicas != '' and config.get('min_replicas') is None:
+        min_replicas = 0
+    else:
+        min_replicas = config.get('min_replicas', '')
 
     # Extract fluent_bit_collector config if present
     fluent_bit_collector = config.get('fluent_bit_collector', {})
@@ -1240,7 +1284,14 @@ def main() -> None:
         
         # Output for GitHub Actions (to stderr so it doesn't interfere with JSON output)
         replica_count = config.get('replica_count', '')
+        max_replicas = config.get('max_replicas', '')
+        if max_replicas != '' and config.get('min_replicas') is None:
+            min_replicas = 0
+        else:
+            min_replicas = config.get('min_replicas', '')
         print(f"::set-output name=replica_count::{replica_count}", file=sys.stderr)
+        print(f"::set-output name=min_replicas::{min_replicas}", file=sys.stderr)
+        print(f"::set-output name=max_replicas::{max_replicas}", file=sys.stderr)
         
         # Output JSON to stdout for tests and compatibility
         print(json.dumps(task_definition, indent=2))
