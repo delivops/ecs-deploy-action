@@ -90,21 +90,28 @@ def validate_config(config: Dict[str, Any]) -> None:
     
     if launch_type == 'FARGATE':
         # Fargate has strict CPU/memory requirements
-        valid_cpu_values = [256, 512, 1024, 2048, 4096]
+        valid_cpu_values = [256, 512, 1024, 2048, 4096, 8192, 16384]
         if cpu not in valid_cpu_values:
-            raise ValidationError(f"Invalid CPU value: {cpu}. Must be one of {valid_cpu_values}")
+            raise ValidationError(
+                f"Invalid CPU value: {cpu}. Must be one of {valid_cpu_values}"
+            )
         
         # Validate memory based on CPU
         valid_memory_for_cpu = {
             256: [512, 1024, 2048],
             512: [1024, 2048, 3072, 4096],
             1024: [2048, 3072, 4096, 5120, 6144, 7168, 8192],
-            2048: list(range(4096, 16385, 1024)),
-            4096: list(range(8192, 30721, 1024))
+            2048: list(range(4096, 16385, 1024)),    # 4 GB to 16 GB
+            4096: list(range(8192, 30721, 1024)),    # 8 GB to 30 GB
+            8192: list(range(16384, 61441, 4096)),   # 16 GB to 60 GB
+            16384: list(range(32768, 122881, 8192)), # 32 GB to 120 GB
         }
         
         if memory not in valid_memory_for_cpu.get(cpu, []):
-            raise ValidationError(f"Invalid memory value {memory} for CPU {cpu}")
+            raise ValidationError(
+                f"Invalid memory value {memory} for CPU {cpu}. "
+                f"Valid values are: {valid_memory_for_cpu.get(cpu, [])}"
+            )
     else:
         # EC2 has more flexible CPU/memory - just validate they're positive if provided
         if cpu is not None and (not isinstance(cpu, int) or cpu <= 0):
