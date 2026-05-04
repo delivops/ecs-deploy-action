@@ -1,0 +1,27 @@
+# envs_from_files Test
+# Demonstrates loading env vars from external dotenv files, with the
+# precedence rule: file entries first (later files override earlier),
+# inline `envs:` always wins over files.
+name: envs-from-files-app
+replica_count: 1
+cpu: 256
+memory: 512
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+port: 8080
+
+# Base: every service inherits common.env, plus an inline override
+# that proves inline beats file values.
+envs_from_files:
+  - ./shared/common.env
+envs:
+  - DATABASE_URL: "postgresql://prod-host:5432/db"
+
+services_overrides:
+  test-service:
+    # Per-service: appends api.env (later in the merged list, so its
+    # LOG_LEVEL=debug wins over common.env's LOG_LEVEL=info), plus an
+    # extra inline env.
+    envs_from_files:
+      - ./shared/api.env
+    envs:
+      - WORKER_MODE: "true"
