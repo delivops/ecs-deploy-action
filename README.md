@@ -209,6 +209,31 @@ services_overrides:
 
 The service name passed to the action (via `ecs_service` or `task_name`) determines which overrides are applied. Services not listed in `services_overrides` use the base configuration.
 
+### Sharing Env Vars Across YAMLs (`envs_from_files`)
+
+When several deploy YAMLs need the same block of env vars, factor them out into a `.env` file and reference it from each YAML instead of copy-pasting:
+
+```yaml
+envs_from_files:
+  - ./shared/common.env
+envs:
+  - DATABASE_URL: "postgresql://prod-host:5432/db"  # overrides common.env
+
+services_overrides:
+  api-service:
+    envs_from_files:
+      - ./shared/api.env  # appended to base list
+```
+
+**Format:** strict-minimal dotenv — `KEY=value`, blank lines, full-line `#` comments, surrounding `"…"`/`'…'` stripped. No `export`, no inline comments, no `${VAR}` interpolation, no escapes. Anything else is a parse error. See [`examples/envs-from-files.yaml`](./examples/envs-from-files.yaml).
+
+**Precedence (highest wins):**
+1. Inline `envs:` (base + per-service appended)
+2. Later files in `envs_from_files` override earlier files
+3. `envs_from_files` entries are appended per-service, same merge rule as `envs:`
+
+**Paths** are resolved relative to the YAML config file's directory. Absolute paths are also accepted. A missing file is a hard error.
+
 ## Architecture
 
 For scheduled tasks, the action:

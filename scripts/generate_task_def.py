@@ -2,6 +2,7 @@
 import yaml
 import json
 import argparse
+import re
 import sys
 import logging
 from typing import Dict, List, Optional, Any
@@ -121,7 +122,7 @@ def validate_config(config: Dict[str, Any]) -> None:
 
 # Fields that are arrays and should be extended (appended) during merge
 ARRAY_FIELDS = {
-    'command', 'entrypoint', 'envs', 'secrets', 'secrets_envs',
+    'command', 'entrypoint', 'envs', 'envs_from_files', 'secrets', 'secrets_envs',
     'secret_files', 'additional_ports', 'writable_dirs'
 }
 
@@ -210,6 +211,76 @@ def validate_services_overrides(config: Dict[str, Any]) -> None:
                 f"got {type(overrides).__name__}"
             )
 
+DOTENV_KEY_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+def parse_dotenv_file(path: Path) -> Dict[str, str]:
+    """Parse a strict-minimal dotenv file into an ordered dict.
+
+    Supported: KEY=value, blank lines, full-line `#` comments, surrounding
+    matched single/double quotes stripped. Anything else raises ValidationError.
+    Last occurrence of a key wins.
+    """
+    if not path.exists():
+        raise ValidationError(f"envs_from_files: file not found: {path}")
+
+    result: Dict[str, str] = {}
+    with path.open('r') as fh:
+        for lineno, raw_line in enumerate(fh, start=1):
+            line = raw_line.rstrip('\n').rstrip('\r')
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
+            if '=' not in line:
+                raise ValidationError(f"{path}:{lineno}: invalid syntax (missing '=')")
+            key, value = line.split('=', 1)
+            key = key.strip()
+            if not DOTENV_KEY_RE.match(key):
+                raise ValidationError(f"{path}:{lineno}: invalid key {key!r}")
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                value = value[1:-1]
+            result[key] = value
+    return result
+
+def expand_envs_from_files(config: Dict[str, Any], yaml_path: Path) -> None:
+    """Resolve envs_from_files paths relative to the YAML, then merge entries
+    into config['envs']. File-derived values are overridden by inline envs;
+    later files in the list override earlier ones. Mutates config in place."""
+    file_refs = config.pop('envs_from_files', None)
+    if not file_refs:
+        return
+
+    if not isinstance(file_refs, list):
+        raise ValidationError(
+            f"envs_from_files must be a list, got {type(file_refs).__name__}"
+        )
+
+    yaml_dir = yaml_path.parent
+    merged: Dict[str, str] = {}
+    for ref in file_refs:
+        if not isinstance(ref, str):
+            raise ValidationError(
+                f"envs_from_files entries must be strings, got {type(ref).__name__}"
+            )
+        ref_path = Path(ref)
+        if not ref_path.is_absolute():
+            ref_path = (yaml_dir / ref_path).resolve()
+        merged.update(parse_dotenv_file(ref_path))
+
+    file_count = len(file_refs)
+    file_key_count = len(merged)
+
+    for entry in config.get('envs', []):
+        if not isinstance(entry, dict):
+            continue
+        for key, value in entry.items():
+            merged[key] = str(value)
+
+    config['envs'] = [{k: v} for k, v in merged.items()]
+    logger.info(
+        f"Loaded {file_key_count} env var(s) from {file_count} file(s) referenced by envs_from_files"
+    )
+
 def load_and_validate_config(yaml_file_path: str, service_name: Optional[str] = None) -> Dict[str, Any]:
     """Load and validate YAML configuration, applying service overrides if present"""
     try:
@@ -228,6 +299,11 @@ def load_and_validate_config(yaml_file_path: str, service_name: Optional[str] = 
 
         # Apply service-specific overrides if present
         config = apply_service_overrides(raw_config, service_name)
+
+        # Expand envs_from_files into the envs list (after merge so per-service
+        # entries are appended; before validation so the final envs list is what
+        # validate_config sees).
+        expand_envs_from_files(config, yaml_path)
 
         # Validate the final merged config
         validate_config(config)
