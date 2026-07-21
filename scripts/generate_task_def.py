@@ -7,48 +7,11 @@ import re
 import sys
 import logging
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
 from pathlib import Path
-from enum import Enum
-
-class LogLevel(Enum):
-    DEBUG = "DEBUG"
-    INFO = "INFO"
-    WARNING = "WARNING"
-    ERROR = "ERROR"
 
 class ValidationError(Exception):
     """Custom exception for validation errors"""
     pass
-
-@dataclass
-class TaskConfig:
-    """Configuration for ECS task definition"""
-    name: str
-    cpu: str = "256"
-    memory: str = "512"
-    cpu_arch: str = "X86_64"
-    command: List[str] = field(default_factory=list)
-    entrypoint: List[str] = field(default_factory=list)
-    port: Optional[int] = None
-    additional_ports: List[Dict[str, int]] = field(default_factory=list)
-    role_arn: str = ""
-    replica_count: str = ""
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'TaskConfig':
-        return cls(
-            name=data.get('name', 'app'),
-            cpu=str(data.get('cpu', 256)),
-            memory=str(data.get('memory', 512)),
-            cpu_arch=data.get('cpu_arch', 'X86_64'),
-            command=data.get('command', []),
-            entrypoint=data.get('entrypoint', []),
-            port=data.get('port'),
-            additional_ports=data.get('additional_ports', []),
-            role_arn=data.get('role_arn', ''),
-            replica_count=data.get('replica_count', '')
-        )
 
 def setup_logging(level: str = "INFO") -> logging.Logger:
     """Setup logging configuration"""
@@ -125,11 +88,6 @@ def validate_config(config: Dict[str, Any]) -> None:
 ARRAY_FIELDS = {
     'command', 'entrypoint', 'envs', 'envs_from_files', 'secrets', 'secrets_envs',
     'secret_files', 'additional_ports', 'writable_dirs'
-}
-
-# Fields that are objects and use shallow merge (replace)
-OBJECT_FIELDS = {
-    'health_check', 'linux_parameters', 'otel_collector', 'fluent_bit_collector'
 }
 
 def merge_configs(base_config: Dict[str, Any], service_override: Dict[str, Any]) -> Dict[str, Any]:
