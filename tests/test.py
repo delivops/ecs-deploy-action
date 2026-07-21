@@ -61,42 +61,29 @@ def run_script_for_yaml(yaml_file, script_path):
         service_name
     ]
     
+    # The generator refuses to substitute mock secret values unless explicitly
+    # allowed. Tests run without AWS credentials, so opt in here (and only here).
+    env = {**os.environ, "ECS_DEPLOY_ALLOW_MOCK_SECRETS": "1"}
+
     try:
         print(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=get_project_root())
-        
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=get_project_root(), env=env)
+
         if result.returncode != 0:
             print(f"Script failed with return code {result.returncode}")
             print(f"STDERR: {result.stderr}")
             print(f"STDOUT: {result.stdout}")
             return None
-        
-        # Parse the JSON output from stdout
+
+        # The generator prints the task definition JSON (and nothing else) to stdout;
+        # all logs go to stderr.
         try:
-            # The script prints the JSON between specific markers
-            lines = result.stdout.split('\n')
-            json_start = None
-            json_end = None
-            
-            for i, line in enumerate(lines):
-                if "----- Task Definition -----" in line:
-                    json_start = i + 1
-                elif "---------------------------" in line and json_start is not None:
-                    json_end = i
-                    break
-            
-            if json_start is not None and json_end is not None:
-                json_text = '\n'.join(lines[json_start:json_end])
-                return json.loads(json_text)
-            else:
-                # Fallback: try to parse the entire stdout as JSON
-                return json.loads(result.stdout)
-                
+            return json.loads(result.stdout)
         except json.JSONDecodeError as e:
             print(f"Failed to parse JSON output: {e}")
             print(f"Output was: {result.stdout}")
             return None
-            
+
     except Exception as e:
         print(f"Exception running script: {e}")
         return None
@@ -202,9 +189,14 @@ def main():
     
     print(f"Found {len(yaml_files)} YAML files")
     
+    # In CI, a missing expected-output file is a failure: the baseline must be
+    # committed and reviewed, not silently generated from whatever the script
+    # currently emits. Locally, auto-create for convenience.
+    ci_mode = os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS") or "--check" in sys.argv
+
     failed_tests = []
     created_files = []
-    
+
     for yaml_file in yaml_files:
         print(f"\n{'='*60}")
         print(f"Processing: {yaml_file.name}")
@@ -225,8 +217,11 @@ def main():
         expected_output = load_expected_json(expected_json_file)
         
         if expected_output is None:
-            # Create the expected output file
-            if save_json_output(actual_output, expected_json_file):
+            if ci_mode:
+                print(f"❌ FAILED: {yaml_file.name} - No expected output baseline "
+                      f"({json_filename}). Generate and commit it locally first.")
+                failed_tests.append(yaml_file.name)
+            elif save_json_output(actual_output, expected_json_file):
                 print(f"✅ CREATED: {yaml_file.name} - Expected output file created")
                 created_files.append(json_filename)
             else:

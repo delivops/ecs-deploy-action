@@ -2,6 +2,7 @@
 import yaml
 import json
 import argparse
+import os
 import re
 import sys
 import logging
@@ -386,7 +387,18 @@ class ContainerBuilder:
 
 class SecretManager:
     """Handle secrets configuration"""
-    
+
+    @staticmethod
+    def _mock_allowed() -> bool:
+        """Whether mock secret keys/ARNs may be substituted on lookup failure.
+
+        Mock fallbacks exist so the test suite can run without AWS credentials.
+        In a real deploy they must NEVER be used silently, otherwise a transient
+        AWS error or an IAM permission gap would bake fabricated secret ARNs into
+        the task definition. Enable only for local/offline testing.
+        """
+        return os.environ.get("ECS_DEPLOY_ALLOW_MOCK_SECRETS", "").strip().lower() in ("1", "true", "yes")
+
     @staticmethod
     def discover_secret_keys(secret_name: str) -> tuple[List[str], str]:
         """Discover all keys in a secret by querying AWS Secrets Manager
@@ -418,35 +430,36 @@ class SecretManager:
                 logger.warning(f"Secret '{secret_name}' does not contain a JSON object")
                 return [], full_secret_arn
                 
-        except (NoCredentialsError, PartialCredentialsError, TokenRetrievalError):
-            # For testing environments where AWS credentials aren't available or expired
-            logger.warning(f"AWS credentials not available or expired. Using mock keys for secret '{secret_name}'")
-            keys = SecretManager._get_mock_keys(secret_name)
-            mock_arn = SecretManager._get_mock_arn(secret_name)
-            return keys, mock_arn
-        except ClientError as e:
-            error_code = e.response['Error']['Code']
+        except (NoCredentialsError, PartialCredentialsError, TokenRetrievalError) as exc:
+            return SecretManager._handle_discovery_failure(
+                secret_name,
+                "AWS credentials are unavailable or expired",
+                exc,
+            )
+        except ClientError as exc:
+            error_code = exc.response['Error']['Code']
             if error_code == 'ResourceNotFoundException':
-                logger.error(f"Secret '{secret_name}' not found")
-                # Fall back to mock keys for testing
-                logger.warning(f"Falling back to mock keys for secret '{secret_name}'")
-                keys = SecretManager._get_mock_keys(secret_name)
-                mock_arn = SecretManager._get_mock_arn(secret_name)
-                return keys, mock_arn
+                reason = f"secret '{secret_name}' was not found"
             else:
-                logger.error(f"AWS error discovering keys for secret '{secret_name}': {e}")
-                # Fall back to mock keys for testing
-                logger.warning(f"Falling back to mock keys for secret '{secret_name}'")
-                keys = SecretManager._get_mock_keys(secret_name)
-                mock_arn = SecretManager._get_mock_arn(secret_name)
-                return keys, mock_arn
-        except Exception as e:
-            logger.error(f"Error discovering keys for secret '{secret_name}': {e}")
-            # Fall back to mock keys for testing
-            logger.warning(f"Falling back to mock keys for secret '{secret_name}'")
-            keys = SecretManager._get_mock_keys(secret_name)
-            mock_arn = SecretManager._get_mock_arn(secret_name)
-            return keys, mock_arn
+                reason = f"AWS error ({error_code})"
+            return SecretManager._handle_discovery_failure(secret_name, reason, exc)
+        except Exception as exc:
+            return SecretManager._handle_discovery_failure(secret_name, str(exc), exc)
+
+    @staticmethod
+    def _handle_discovery_failure(secret_name: str, reason: str, exc: Exception) -> tuple[List[str], str]:
+        """Either substitute mock values (test mode) or fail loudly (real deploy)."""
+        if SecretManager._mock_allowed():
+            logger.warning(
+                f"Secret discovery for '{secret_name}' failed ({reason}); using mock keys "
+                f"because ECS_DEPLOY_ALLOW_MOCK_SECRETS is set"
+            )
+            return SecretManager._get_mock_keys(secret_name), SecretManager._get_mock_arn(secret_name)
+        raise ValidationError(
+            f"Failed to discover keys for secret '{secret_name}': {reason}. "
+            f"Refusing to substitute mock secret values in a real deploy. "
+            f"Set ECS_DEPLOY_ALLOW_MOCK_SECRETS=1 only for local/offline testing."
+        ) from exc
     
     @staticmethod
     def _get_mock_keys(secret_name: str) -> List[str]:
@@ -511,23 +524,22 @@ class SecretManager:
             secret_name = secret_config.get('name', '')
             secret_values = secret_config.get('values', [])
             
-            # Handle name-only format (new feature) - query AWS to get keys
+            # Handle name-only format (new feature) - query AWS to get keys.
+            # Any discovery failure raises ValidationError (see discover_secret_keys)
+            # and is intentionally allowed to propagate so the deploy fails loudly
+            # rather than emitting a task definition with missing/mock secrets.
             if secret_name and not secret_id and not secret_values:
-                try:
-                    # Query AWS Secrets Manager to discover keys in this secret
-                    discovered_keys, full_secret_arn = SecretManager.discover_secret_keys(secret_name)
-                    if discovered_keys:
-                        for key in discovered_keys:
-                            secrets.append({
-                                "name": key,
-                                "valueFrom": f"{full_secret_arn}:{key}::"
-                            })
-                        logger.info(f"Auto-discovered {len(discovered_keys)} keys from secret '{secret_name}': {discovered_keys}")
-                        logger.info(f"Using full secret ARN: {full_secret_arn}")
-                    else:
-                        logger.warning(f"No keys found in secret '{secret_name}'")
-                except Exception as e:
-                    logger.error(f"Failed to discover keys for secret '{secret_name}': {e}")
+                discovered_keys, full_secret_arn = SecretManager.discover_secret_keys(secret_name)
+                if discovered_keys:
+                    for key in discovered_keys:
+                        secrets.append({
+                            "name": key,
+                            "valueFrom": f"{full_secret_arn}:{key}::"
+                        })
+                    logger.info(f"Auto-discovered {len(discovered_keys)} keys from secret '{secret_name}': {discovered_keys}")
+                    logger.info(f"Using full secret ARN: {full_secret_arn}")
+                else:
+                    logger.warning(f"No keys found in secret '{secret_name}'")
                 continue
             
             # Handle traditional id + values format
@@ -1321,9 +1333,15 @@ def main() -> None:
         
         logger.info(f"Task definition written to {output_path}")
         
-        # Output for GitHub Actions (to stderr so it doesn't interfere with JSON output)
+        # Emit replica_count as a GitHub Actions step output via $GITHUB_OUTPUT.
+        # The legacy ::set-output workflow command is deprecated and disabled by
+        # GitHub, and was additionally being written to stderr (which Actions never
+        # parses), so the output was silently never set.
         replica_count = config.get('replica_count', '')
-        print(f"::set-output name=replica_count::{replica_count}", file=sys.stderr)
+        github_output = os.environ.get("GITHUB_OUTPUT")
+        if github_output:
+            with open(github_output, "a") as gh_out:
+                gh_out.write(f"replica_count={replica_count}\n")
         
         # Output JSON to stdout for tests and compatibility
         print(json.dumps(task_definition, indent=2))
