@@ -40,7 +40,11 @@ inputs:
   dry_run:
     description: 'Whether to perform a dry run'
     default: 'false'
-    required: false 
+    required: false
+  propagate_tags:
+    description: 'Where the service copies tags from when launching tasks (service mode only). Set to SERVICE so Terraform-managed service tags propagate to tasks; use NONE to disable.'
+    default: 'SERVICE'
+    required: false
   ecr_registry:
     description: 'The ECR registry URL'
     required: false
@@ -106,6 +110,11 @@ runs:
         cluster: ${{ inputs.ecs_cluster }}
         desired-count: ${{ steps.generate-task-def.outputs.replica_count }}
         wait-for-service-stability: true
+        # Preserve the Terraform-managed propagate_tags setting on the service.
+        # amazon-ecs-deploy-task-definition always sends propagateTags in its
+        # UpdateService call; when unset AWS treats it as NONE and silently resets
+        # the service, wiping Terraform's SERVICE setting so tasks stop inheriting tags.
+        propagate-tags: ${{ inputs.propagate_tags }}
         
     - id: check-service-deployment
       if: ${{ inputs.deployment_type == 'service' && inputs.dry_run == 'false' }}

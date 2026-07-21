@@ -45,6 +45,7 @@ Deploy standalone task definitions that can be triggered manually or by external
 | `aws_role` | The AWS IAM role to assume | No | `github_services` |
 | `dry_run` | Whether to perform a dry run | No | `false` |
 | `ecr_registry` | Use ECR registry for main container image | No | `true` |
+| `propagate_tags` | Where the service copies tags from when launching tasks (service mode only): `SERVICE` or `NONE` | No | `SERVICE` |
 
 ## Example Usage
 
@@ -246,6 +247,14 @@ For triggerable tasks, the action:
 2. Registers the new task definition with ECS
 
 All infrastructure (EventBridge rules, schedules, network configuration, IAM roles) remains managed in your Terraform code, ensuring clear separation of concerns between infrastructure and application deployments.
+
+## Task Tagging
+
+Tags are owned by Terraform, not by this action. The action never injects tags into the generated task definition or sources them from SSM — it only avoids clobbering the tag configuration Terraform sets.
+
+- **Service** — Terraform tags the ECS service and sets `propagate_tags = "SERVICE"`, so ECS copies those tags onto every launched task. The service deploy step passes `propagate-tags: SERVICE` (configurable via the `propagate_tags` input) so each deploy keeps that setting instead of resetting it to `NONE`.
+- **Scheduled task** — tags are set by Terraform on the EventBridge target (`aws_cloudwatch_event_target` → `ecs_target { tags = {...} }`, i.e. `EcsParameters.TagList`). The `update-eventbridge-target` step rewrites only `EcsParameters.TaskDefinitionArn`, so the target's `TagList` and `PropagateTags` survive each deploy.
+- **Triggerable task** — this action only registers the task definition; it does not run the task. The caller that launches it must pass the Terraform-owned tag set on `aws ecs run-task` via `--tags` (or `Tags` in the API), for example `aws ecs run-task --cluster <cluster> --task-definition <arn> --tags key=Team,value=platform ...`. Without `--tags`, the launched task is untagged.
 
 ## License
 
