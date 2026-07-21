@@ -3,10 +3,14 @@ name: Test and Update Expected Outputs
 on:
   pull_request:
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   test-and-update:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v6
       with:
@@ -27,6 +31,9 @@ jobs:
       run: python tests/test.py
 
     - name: Commit and push changes
+      # Forked-PR runs get a read-only GITHUB_TOKEN and cannot push, which would
+      # fail the job for outside contributors. Only auto-commit for same-repo PRs.
+      if: github.event.pull_request.head.repo.full_name == github.repository
       uses: stefanzweifel/git-auto-commit-action@v7
       id: auto_commit
       with:
