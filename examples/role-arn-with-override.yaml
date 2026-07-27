@@ -1,0 +1,13 @@
+# Shared role for most slots, with one slot overridden.
+#
+# role_arn supplies both slots; a per-slot key takes precedence over it. Here
+# the task role comes from role_arn and the execution role is overridden, which
+# is the common shape when only the execution role needs extra permissions
+# (private ECR pulls, secrets, KMS).
+cpu: 256
+memory: 512
+port: 8080
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+execution_role_arn: arn:aws:iam::123456789012:role/my-cluster_my-service_execution
+envs:
+  - LOG_LEVEL: info

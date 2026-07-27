@@ -57,3 +57,6 @@ health_check:
   retries: 3
   start_period: 60
 ```
+
+> **`replica_count` sets the service's desired count on every deploy.** Omit it for services under
+> autoscaling, otherwise each deploy resets the running count to this value.

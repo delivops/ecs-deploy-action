@@ -2,11 +2,11 @@
 import yaml
 import json
 import argparse
+import os
 import re
 import sys
 import logging
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
 from pathlib import Path
 from enum import Enum
 
@@ -20,34 +20,20 @@ class ValidationError(Exception):
     """Custom exception for validation errors"""
     pass
 
-@dataclass
-class TaskConfig:
-    """Configuration for ECS task definition"""
-    name: str
-    cpu: str = "256"
-    memory: str = "512"
-    cpu_arch: str = "X86_64"
-    command: List[str] = field(default_factory=list)
-    entrypoint: List[str] = field(default_factory=list)
-    port: Optional[int] = None
-    additional_ports: List[Dict[str, int]] = field(default_factory=list)
-    role_arn: str = ""
-    replica_count: str = ""
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'TaskConfig':
-        return cls(
-            name=data.get('name', 'app'),
-            cpu=str(data.get('cpu', 256)),
-            memory=str(data.get('memory', 512)),
-            cpu_arch=data.get('cpu_arch', 'X86_64'),
-            command=data.get('command', []),
-            entrypoint=data.get('entrypoint', []),
-            port=data.get('port'),
-            additional_ports=data.get('additional_ports', []),
-            role_arn=data.get('role_arn', ''),
-            replica_count=data.get('replica_count', '')
-        )
+class RoleResolutionError(Exception):
+    """Raised when taskRoleArn / executionRoleArn cannot be resolved.
+
+    Deliberately not a subclass of ValidationError: the config may be perfectly
+    valid and the failure be environmental (missing SSM parameter, no
+    credentials), so it must not be reported as "validation failed".
+    """
+    pass
+
+# YAML keys that hold an IAM role ARN, in no particular order.
+ROLE_ARN_KEYS = ('role_arn', 'task_role_arn', 'execution_role_arn')
+
+# arn:<partition>:iam::<12-digit account>:role/<path and name, no whitespace>
+ROLE_ARN_PATTERN = re.compile(r'^arn:aws[a-z0-9-]*:iam::\d{12}:role/\S+$')
 
 def setup_logging(level: str = "INFO") -> logging.Logger:
     """Setup logging configuration"""
@@ -62,6 +48,39 @@ def setup_logging(level: str = "INFO") -> logging.Logger:
 
 # Initialize logger
 logger = setup_logging()
+
+def normalize_role_value(config: Dict[str, Any], key: str,
+                         error_cls: type = ValidationError) -> Optional[str]:
+    """Normalize a role YAML value to a stripped string, or None when unset.
+
+    A missing key, YAML null and the empty string all mean "not set here" and
+    fall through to the next precedence level.
+    """
+    raw = config.get(key)
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        # YAML 1.1 resolves bare no/off/yes/on to booleans, so an unquoted value
+        # can arrive here as False and produce a baffling downstream error.
+        raise error_cls(
+            f"{key} was read as the boolean {raw}. YAML treats bare no/off/yes/on "
+            f"as booleans - quote the value, and set it to a full IAM role ARN."
+        )
+    value = str(raw).strip()
+    return value or None
+
+def validate_role_arn(value: str, source: str,
+                      error_cls: type = ValidationError) -> None:
+    """Reject anything that is not a full IAM role ARN.
+
+    The Terraform module validates the same thing on its side ("must be a full
+    IAM role ARN, not a role name"), so a bare name here is a real mistake.
+    """
+    if not ROLE_ARN_PATTERN.match(value):
+        raise error_cls(
+            f"{source} is not an IAM role ARN: '{value}'. Expected "
+            f"arn:aws:iam::<account-id>:role/<name>."
+        )
 
 def validate_config(config: Dict[str, Any]) -> None:
     """Validate the YAML configuration"""
@@ -119,6 +138,15 @@ def validate_config(config: Dict[str, Any]) -> None:
             raise ValidationError(f"Invalid CPU value: {cpu}. Must be a positive integer.")
         if memory is not None and (not isinstance(memory, int) or memory <= 0):
             raise ValidationError(f"Invalid memory value: {memory}. Must be a positive integer.")
+
+    # Role ARN shape. Actual resolution (including the SSM fallback) happens
+    # later in RoleResolver; checking the shape here keeps --validate-only
+    # entirely offline while still catching typos and bare role names.
+    for key in ROLE_ARN_KEYS:
+        value = normalize_role_value(config, key)
+        if value is None:
+            continue
+        validate_role_arn(value, f"YAML key '{key}'")
 
 # Fields that are arrays and should be extended (appended) during merge
 ARRAY_FIELDS = {
@@ -383,6 +411,211 @@ class ContainerBuilder:
         
         self.logger.debug(f"Built {len(port_mappings)} port mappings (network_mode={network_mode})")
         return port_mappings
+
+class RoleResolver:
+    """Resolve taskRoleArn / executionRoleArn for a task definition.
+
+    Precedence, evaluated independently per slot:
+
+      1. per-slot YAML key  task_role_arn / execution_role_arn
+      2. shared YAML key    role_arn
+      3. SSM parameter published by terraform-aws-ecs-service (>= v2.0.0):
+           /ecs/<cluster>/<service>/task-role
+           /ecs/<cluster>/<service>/execution-role
+
+    Before v3.0.0 the module derived both slots from a single shared role, so
+    reusing one ARN for both happened to work. v3 made them independent
+    identities, so each slot is resolved on its own.
+
+    Both slots are mandatory: every task has a task role and an execution role.
+
+    Unlike SecretManager below, this class NEVER substitutes mock values. An
+    unresolved slot, or any AWS fault, is a hard failure - a task definition
+    silently registered with the wrong role is worse than a failed deploy.
+    """
+
+    # (yaml key, task-definition key, SSM parameter suffix)
+    SLOTS = (
+        ("task_role_arn", "taskRoleArn", "task-role"),
+        ("execution_role_arn", "executionRoleArn", "execution-role"),
+    )
+
+    def __init__(self, cluster_name: str, service_name: str, aws_region: str):
+        self.cluster_name = cluster_name
+        self.service_name = service_name
+        self.aws_region = aws_region
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+
+    def resolve(self, config: Dict[str, Any]) -> Dict[str, str]:
+        """Return the task-definition role keys mapped to their ARNs.
+
+        The caller can splat the result straight into the task definition dict.
+        """
+        shared = normalize_role_value(config, 'role_arn', RoleResolutionError)
+
+        resolved: Dict[str, str] = {}
+        pending: Dict[str, tuple] = {}  # ssm parameter name -> (td_key, yaml_key)
+
+        for yaml_key, td_key, suffix in self.SLOTS:
+            # Track which key actually supplied the value, so the log line and
+            # any error name a key the user can really find in their YAML.
+            value = normalize_role_value(config, yaml_key, RoleResolutionError)
+            source_key = yaml_key
+            if value is None:
+                value, source_key = shared, 'role_arn'
+
+            if value is None:
+                pending[self._ssm_name(suffix)] = (td_key, yaml_key)
+                continue
+
+            validate_role_arn(value, f"YAML key '{source_key}'", RoleResolutionError)
+            resolved[td_key] = value
+            self.logger.info(f"{td_key} taken from YAML key '{source_key}'")
+
+        if pending:
+            resolved.update(self._resolve_from_ssm(pending))
+
+        # Emit in SLOTS order so JSON key order is stable regardless of source.
+        return {td_key: resolved[td_key] for _, td_key, _ in self.SLOTS if td_key in resolved}
+
+    def _ssm_name(self, suffix: str) -> str:
+        return f"/ecs/{self.cluster_name}/{self.service_name}/{suffix}"
+
+    def _resolve_from_ssm(self, pending: Dict[str, tuple]) -> Dict[str, str]:
+        """Batch-read the outstanding role ARNs from SSM Parameter Store."""
+        # Imported lazily so a fully YAML-configured deploy needs neither boto3
+        # nor AWS credentials. The test suite relies on this.
+        try:
+            import boto3
+            from botocore.exceptions import (
+                BotoCoreError, ClientError, NoCredentialsError,
+                PartialCredentialsError, TokenRetrievalError, NoRegionError,
+                EndpointConnectionError,
+            )
+        except ImportError as e:
+            raise RoleResolutionError(
+                f"boto3 is required to read role ARNs from SSM but could not be "
+                f"imported ({e}). Install requirements.txt, or set task_role_arn / "
+                f"execution_role_arn (or role_arn) in the task config YAML."
+            ) from e
+
+        names = sorted(pending)
+        joined = ', '.join(names)
+        self.logger.info(f"Resolving role ARNs from SSM: {joined}")
+
+        try:
+            client = boto3.Session().client('ssm', region_name=self.aws_region)
+            response = client.get_parameters(Names=names, WithDecryption=True)
+        except (NoCredentialsError, PartialCredentialsError, TokenRetrievalError) as e:
+            raise RoleResolutionError(
+                f"Cannot read role ARNs from SSM: no usable AWS credentials "
+                f"({type(e).__name__}). Parameters needed: {joined}. Configure AWS "
+                f"credentials for this step, or set task_role_arn / "
+                f"execution_role_arn (or role_arn) in the task config YAML."
+            ) from e
+        except NoRegionError as e:
+            raise RoleResolutionError(
+                f"Cannot read role ARNs from SSM: no AWS region configured "
+                f"(aws_region={self.aws_region!r})."
+            ) from e
+        except EndpointConnectionError as e:
+            raise RoleResolutionError(
+                f"Cannot reach the SSM endpoint in region '{self.aws_region}': {e}"
+            ) from e
+        except ClientError as e:
+            raise self._client_error(e, names) from e
+        except BotoCoreError as e:
+            # Catch-all for the rest of botocore's tree: connect/read timeouts,
+            # SSL and proxy failures, credential-provider errors, bad profiles.
+            # ClientError is not a BotoCoreError subclass, so this cannot shadow
+            # the taxonomy above.
+            raise RoleResolutionError(
+                f"Failed to read role ARNs from SSM ({joined}): "
+                f"{type(e).__name__}: {e}. Alternatively set task_role_arn / "
+                f"execution_role_arn (or role_arn) in the task config YAML."
+            ) from e
+
+        # Names that do not exist are returned in InvalidParameters rather than
+        # raising - ParameterNotFound is an error shape of GetParameter
+        # (singular) only. A name the caller is not authorized for also tends to
+        # land here, which is why the failure message names both causes.
+        invalid = response.get('InvalidParameters', [])
+        if invalid:
+            self.logger.debug(f"SSM returned InvalidParameters: {invalid}")
+
+        values = {
+            p['Name']: (p.get('Value') or '').strip()
+            for p in response.get('Parameters', [])
+        }
+
+        resolved: Dict[str, str] = {}
+        missing = []
+        for name, (td_key, yaml_key) in pending.items():
+            value = values.get(name)
+            if not value:
+                missing.append((name, td_key, yaml_key))
+                continue
+            validate_role_arn(value, f"SSM parameter {name}", RoleResolutionError)
+            resolved[td_key] = value
+            self.logger.info(f"{td_key} resolved from SSM parameter {name}")
+
+        if missing:
+            raise RoleResolutionError(self._unresolved_message(missing))
+
+        return resolved
+
+    def _client_error(self, error, names: List[str]) -> RoleResolutionError:
+        """Translate a botocore ClientError into an actionable message."""
+        code = error.response.get('Error', {}).get('Code', 'Unknown')
+        joined = ', '.join(names)
+
+        if code in ('AccessDeniedException', 'AccessDenied', 'UnauthorizedOperation'):
+            return RoleResolutionError(
+                f"Access denied reading role ARNs from SSM ({joined}). The deploy "
+                f"role needs ssm:GetParameters (plural) on "
+                f"arn:aws:ssm:{self.aws_region}:<account-id>:parameter/ecs/"
+                f"{self.cluster_name}/{self.service_name}/*. Alternatively set "
+                f"task_role_arn / execution_role_arn (or role_arn) in the YAML."
+            )
+        if code in ('ThrottlingException', 'TooManyUpdates', 'RequestLimitExceeded'):
+            return RoleResolutionError(
+                f"SSM throttled the role lookup ({code}) for {joined}. Retry the deploy."
+            )
+        if code in ('ExpiredTokenException', 'ExpiredToken',
+                    'UnrecognizedClientException', 'InvalidClientTokenId'):
+            return RoleResolutionError(
+                f"AWS credentials are expired or invalid ({code}) while reading role "
+                f"ARNs from SSM ({joined})."
+            )
+        return RoleResolutionError(
+            f"AWS error {code} reading role ARNs from SSM ({joined}): {error}"
+        )
+
+    def _unresolved_message(self, missing: List[tuple]) -> str:
+        """One block per unresolved slot, so both are reported in one run."""
+        blocks = []
+        for name, td_key, yaml_key in missing:
+            width = max(len(yaml_key), len('role_arn')) + 2
+            per_slot = f"'{yaml_key}'".ljust(width)
+            shared = "'role_arn'".ljust(width)
+            blocks.append(
+                f"Could not determine {td_key} for service '{self.service_name}' in "
+                f"cluster '{self.cluster_name}'.\n"
+                f"  Tried, in order:\n"
+                f"    1. YAML key {per_slot} - not set\n"
+                f"    2. YAML key {shared} - not set\n"
+                f"    3. SSM parameter {name}\n"
+                f"       - not returned (it does not exist, or the deploy role lacks\n"
+                f"         ssm:GetParameters on it)\n"
+                f"  Fix one of:\n"
+                f"    * set '{yaml_key}' (or 'role_arn') in the task config YAML; or\n"
+                f"    * let terraform-aws-ecs-service create the role - it publishes\n"
+                f"      {name} automatically.\n"
+                f"  Note: scheduled_task and triggerable_task deployments are not managed\n"
+                f"  by the ECS service module and have no such SSM parameter - set the\n"
+                f"  role ARNs in YAML for those."
+            )
+        return "\n\n".join(blocks)
 
 class SecretManager:
     """Handle secrets configuration"""
@@ -1202,14 +1435,19 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
                     "containerPath": dir_path
                 })
     
+    # Resolve the two IAM role slots: YAML first, then the SSM parameters
+    # published by terraform-aws-ecs-service. Unresolved slots are a hard error.
+    # Done here, after the containers are built, so pure-config errors still
+    # surface before any network I/O.
+    role_arns = RoleResolver(cluster_name, app_name, aws_region).resolve(config)
+
     # Create the complete task definition
     task_definition = {
         "containerDefinitions": container_definitions,
         "cpu": cpu,
         "memory": memory,
         "family": f"{cluster_name}_{app_name}",
-        "taskRoleArn": config.get('role_arn', ''),
-        "executionRoleArn": config.get('role_arn', ''),
+        **role_arns,
         "networkMode": network_mode,
         "requiresCompatibilities": [
             launch_type
@@ -1286,6 +1524,42 @@ Examples:
     
     return args
 
+def emit_replica_count(replica_count: Any) -> None:
+    """Publish replica_count as a GitHub Actions step output.
+
+    Feeds `desired-count` on the deploy step. An unset replica_count writes an
+    empty value, which amazon-ecs-deploy-task-definition treats as "not
+    specified", leaving the service's live desired count alone.
+    """
+    value = '' if replica_count is None else str(replica_count).strip()
+
+    if value:
+        # Guard against a typo like `replica_count: two` becoming an opaque
+        # failure inside the deploy action. Deliberately stricter than int():
+        # that accepts "5_0" as 50 and non-ASCII digits that GitHub Actions
+        # would then hand to the deploy step as garbage. Zero is valid - it is
+        # how a service is scaled down.
+        if re.fullmatch(r'[0-9]+', value):
+            value = str(int(value))  # normalize e.g. "007" -> "7"
+        else:
+            logger.warning(
+                f"Ignoring replica_count={value!r}: expected a non-negative integer. "
+                f"The service's current desired count will be left unchanged."
+            )
+            value = ''
+
+    github_output = os.environ.get('GITHUB_OUTPUT')
+    if not github_output:
+        logger.debug(
+            f"GITHUB_OUTPUT not set (not running in GitHub Actions); "
+            f"replica_count={value!r}"
+        )
+        return
+
+    with open(github_output, 'a', encoding='utf-8') as handle:
+        handle.write(f"replica_count={value}\n")
+    logger.info(f"Set GitHub Actions output replica_count={value!r}")
+
 def main() -> None:
     """Main function with proper error handling"""
     try:
@@ -1321,13 +1595,17 @@ def main() -> None:
         
         logger.info(f"Task definition written to {output_path}")
         
-        # Output for GitHub Actions (to stderr so it doesn't interfere with JSON output)
-        replica_count = config.get('replica_count', '')
-        print(f"::set-output name=replica_count::{replica_count}", file=sys.stderr)
-        
+        # Output for GitHub Actions. ::set-output was disabled by GitHub in 2023
+        # (and was being written to stderr besides), so this output never
+        # actually reached the workflow; $GITHUB_OUTPUT is the supported way.
+        emit_replica_count(config.get('replica_count', ''))
+
         # Output JSON to stdout for tests and compatibility
         print(json.dumps(task_definition, indent=2))
-        
+
+    except RoleResolutionError as e:
+        logger.error(f"Role resolution failed:\n{e}")
+        sys.exit(1)
     except ValidationError as e:
         logger.error(f"Configuration validation failed: {e}")
         sys.exit(1)

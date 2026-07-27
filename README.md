@@ -166,10 +166,69 @@ The action uses a simplified YAML configuration file for task definitions. See t
 - Health checks
 - Port mappings
 - OpenTelemetry and Fluent Bit integration
+- [Task and execution roles](./docs/roles.md) (explicit ARNs or automatic discovery from SSM)
 - [EC2 launch type support](./docs/ec2-launch-type.md) (with bridge/host network modes)
 - [Linux parameters](./docs/linux-parameters.md) (init process, capabilities, shared memory, devices)
 - Multi-service YAML configuration
 - And more
+
+### Task and Execution Roles
+
+`role_arn` is optional. Each role slot is resolved independently, in this order:
+
+| Precedence | `taskRoleArn` | `executionRoleArn` |
+|---|---|---|
+| 1 | YAML `task_role_arn` | YAML `execution_role_arn` |
+| 2 | YAML `role_arn` | YAML `role_arn` |
+| 3 | SSM `/ecs/<cluster>/<service>/task-role` | SSM `/ecs/<cluster>/<service>/execution-role` |
+
+Those SSM parameters are published automatically by
+[`delivops/terraform-aws-ecs-service`](https://github.com/delivops/terraform-aws-ecs-service),
+so a service managed by that module needs no role configuration here at all:
+
+```yaml
+# Roles discovered from SSM - nothing to configure
+cpu: 256
+memory: 512
+port: 8080
+```
+
+Setting `role_arn` keeps the previous behavior of using one role for both slots. Since module
+v3.0.0 the task and execution roles are independent identities, so they can also be set
+separately:
+
+```yaml
+task_role_arn: arn:aws:iam::123456789012:role/my-cluster_my-service
+execution_role_arn: arn:aws:iam::123456789012:role/my-cluster_my-service_execution
+```
+
+Both roles are mandatory. If a slot cannot be resolved from any of the three sources, the deploy
+**fails** rather than registering a task definition with a missing role.
+
+**Requirements and caveats:**
+
+- The deploy role (`aws_role`) needs **`ssm:GetParameters`** (plural) on
+  `arn:aws:ssm:<region>:<account-id>:parameter/ecs/*/*/task-role` and `.../execution-role`.
+  This is only needed for the SSM fallback — specifying roles in YAML requires no new permission.
+- `scheduled_task` and `triggerable_task` deployments are not managed by the ECS service module,
+  so no SSM parameter exists for them. **Set the role ARNs in YAML for those.**
+
+See [docs/roles.md](./docs/roles.md) for the full details.
+
+### Replica Count
+
+`replica_count` sets the ECS service's desired count on every deploy. Omit it entirely for
+services under autoscaling — otherwise each deploy resets the running task count to the number in
+your YAML.
+
+> ⚠️ **This changed behavior.** `replica_count` never actually reached the deploy step before: it
+> was published with `::set-output`, which GitHub disabled in 2023, and written to stderr besides.
+> Deploys therefore always retained the service's live desired count, whatever the YAML said. It
+> now works as documented, so **any config that already sets `replica_count` will start enforcing
+> it.** Because `terraform-aws-ecs-service` sets `ignore_changes = [desired_count]`, nothing else
+> will correct a service that autoscaling had scaled up. Review your configs before upgrading.
+>
+> Values that are not positive integers are ignored with a warning rather than failing the deploy.
 
 ### Multi-Service YAML
 
@@ -207,6 +266,10 @@ services_overrides:
 | Arrays (`envs`, `secrets`, `command`) | Service values are appended to base |
 | Objects (`health_check`, `otel_collector`) | Service object completely replaces base |
 | Null values | Removes the field from configuration |
+
+> **Clearing a role field.** `task_role_arn: null` *removes* the key, so resolution falls through
+> to `role_arn` and then to SSM. Beware `task_role_arn: no`, which YAML parses as the boolean
+> `false`; the action rejects it with an explanatory error.
 
 The service name passed to the action (via `ecs_service` or `task_name`) determines which overrides are applied. Services not listed in `services_overrides` use the base configuration.
 
