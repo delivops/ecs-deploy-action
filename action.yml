@@ -34,7 +34,7 @@ inputs:
     description: 'The name of the ECS cluster'
     required: true
   aws_role:
-    description: 'The AWS IAM role to assume'
+    description: 'The AWS IAM role to assume. Needs ssm:GetParameters on /ecs/<cluster>/<service>/{task,execution}-role when the task config YAML omits role_arn.'
     default: 'github_services'
     required: false
   dry_run:

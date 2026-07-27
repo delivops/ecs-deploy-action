@@ -42,7 +42,7 @@ Deploy standalone task definitions that can be triggered manually or by external
 | `aws_account_id` | The AWS account ID | Yes | - |
 | `aws_region` | The AWS region | Yes | - |
 | `ecs_cluster` | The name of the ECS cluster | Yes | - |
-| `aws_role` | The AWS IAM role to assume | No | `github_services` |
+| `aws_role` | The AWS IAM role to assume. Needs `ssm:GetParameters` when roles are discovered from SSM (see [Task and Execution Roles](#task-and-execution-roles)) | No | `github_services` |
 | `dry_run` | Whether to perform a dry run | No | `false` |
 | `ecr_registry` | Use ECR registry for main container image | No | `true` |
 | `propagate_tags` | Where the service copies tags from when launching tasks (service mode only): `SERVICE` or `NONE` | No | `SERVICE` |
@@ -166,10 +166,60 @@ The action uses a simplified YAML configuration file for task definitions. See t
 - Health checks
 - Port mappings
 - OpenTelemetry and Fluent Bit integration
+- [Task and execution roles](./docs/roles.md) (explicit ARNs or automatic discovery from SSM)
 - [EC2 launch type support](./docs/ec2-launch-type.md) (with bridge/host network modes)
 - [Linux parameters](./docs/linux-parameters.md) (init process, capabilities, shared memory, devices)
 - Multi-service YAML configuration
 - And more
+
+### Task and Execution Roles
+
+`role_arn` is optional. Each role slot is resolved independently, in this order:
+
+| Precedence | `taskRoleArn` | `executionRoleArn` |
+|---|---|---|
+| 1 | YAML `task_role_arn` | YAML `execution_role_arn` |
+| 2 | YAML `role_arn` | YAML `role_arn` |
+| 3 | SSM `/ecs/<cluster>/<service>/task-role` | SSM `/ecs/<cluster>/<service>/execution-role` |
+
+Those SSM parameters are published automatically by
+[`delivops/terraform-aws-ecs-service`](https://github.com/delivops/terraform-aws-ecs-service),
+so a service managed by that module needs no role configuration here at all:
+
+```yaml
+# Roles discovered from SSM - nothing to configure
+cpu: 256
+memory: 512
+port: 8080
+```
+
+Setting `role_arn` keeps the previous behavior of using one role for both slots. Since module
+v3.0.0 the task and execution roles are independent identities, so they can also be set
+separately:
+
+```yaml
+task_role_arn: arn:aws:iam::123456789012:role/my-cluster_my-service
+execution_role_arn: arn:aws:iam::123456789012:role/my-cluster_my-service_execution
+```
+
+If a slot cannot be resolved from any of the three sources, the deploy **fails** rather than
+registering a task definition with a missing role. To declare that a slot deliberately has no
+role — matching a module config of `task_role = {}`, which creates no role and publishes no
+parameter — use the literal string `none`:
+
+```yaml
+task_role_arn: none   # omit taskRoleArn entirely
+```
+
+**Requirements and caveats:**
+
+- The deploy role (`aws_role`) needs **`ssm:GetParameters`** (plural) on
+  `arn:aws:ssm:<region>:<account-id>:parameter/ecs/*/*/task-role` and `.../execution-role`.
+  This is only needed for the SSM fallback — specifying roles in YAML requires no new permission.
+- `scheduled_task` and `triggerable_task` deployments are not managed by the ECS service module,
+  so no SSM parameter exists for them. **Set the role ARNs in YAML for those.**
+
+See [docs/roles.md](./docs/roles.md) for the full details.
 
 ### Multi-Service YAML
 
@@ -207,6 +257,12 @@ services_overrides:
 | Arrays (`envs`, `secrets`, `command`) | Service values are appended to base |
 | Objects (`health_check`, `otel_collector`) | Service object completely replaces base |
 | Null values | Removes the field from configuration |
+
+> **`null` vs `none` for role fields.** `task_role_arn: null` *removes* the key, so resolution
+> falls through to `role_arn` and then to SSM. `task_role_arn: none` is the string sentinel
+> meaning *no role at all* — the key is omitted from the task definition and SSM is not consulted.
+> Beware `task_role_arn: no`, which YAML parses as the boolean `false`; the action rejects it with
+> an explanatory error.
 
 The service name passed to the action (via `ecs_service` or `task_name`) determines which overrides are applied. Services not listed in `services_overrides` use the base configuration.
 

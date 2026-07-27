@@ -57,3 +57,10 @@ health_check:
   retries: 3
   start_period: 60
 ```
+
+> **`role_arn` is optional.** When omitted, the task and execution roles are read from the SSM
+> parameters published by `terraform-aws-ecs-service`. They can also be set separately via
+> `task_role_arn` / `execution_role_arn`. See [Task and Execution Roles](./roles.md).
+
+> **`replica_count` sets the service's desired count on every deploy.** Omit it for services under
+> autoscaling, otherwise each deploy resets the running count to this value.

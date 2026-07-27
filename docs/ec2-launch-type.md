@@ -75,6 +75,9 @@ additional_ports:
 role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
 ```
 
+> `role_arn` is optional in both examples above — when omitted, the task and execution roles are
+> read from SSM. See [Task and Execution Roles](./roles.md).
+
 This will generate port mappings with dynamic host ports:
 ```json
 {

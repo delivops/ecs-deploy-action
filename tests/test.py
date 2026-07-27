@@ -2,7 +2,11 @@
 """
 Simplified test runner that processes each YAML file in examples/ directory,
 executes the generate_task_def.py script, and compares output against expected JSON files.
-If expected JSON doesn't exist, it creates it.
+
+A missing expected JSON is a FAILURE by default: otherwise a newly added example
+would pass vacuously on its first run and CI would auto-commit whatever it
+happened to produce, so the golden file could never catch a regression it was
+added to catch. Re-run with UPDATE_EXPECTED=1 to (re)generate missing files.
 """
 
 import os
@@ -27,6 +31,10 @@ def get_examples_dir():
 def get_expected_outputs_dir():
     """Get the expected outputs directory."""
     return get_script_dir() / "expected_outputs"
+
+def update_expected():
+    """Whether missing expected-output files may be generated on this run."""
+    return os.environ.get('UPDATE_EXPECTED') == '1'
 
 def get_script_path():
     """Get the path to the generate_task_def.py script."""
@@ -225,8 +233,11 @@ def main():
         expected_output = load_expected_json(expected_json_file)
         
         if expected_output is None:
-            # Create the expected output file
-            if save_json_output(actual_output, expected_json_file):
+            if not update_expected():
+                print(f"❌ FAILED: {yaml_file.name} - no expected output committed at "
+                      f"{json_filename} (re-run with UPDATE_EXPECTED=1 to create it)")
+                failed_tests.append(yaml_file.name)
+            elif save_json_output(actual_output, expected_json_file):
                 print(f"✅ CREATED: {yaml_file.name} - Expected output file created")
                 created_files.append(json_filename)
             else:

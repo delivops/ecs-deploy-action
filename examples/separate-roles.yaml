@@ -1,0 +1,12 @@
+# Distinct task and execution roles.
+#
+# terraform-aws-ecs-service v3 made the two roles independent identities, so a
+# single shared role_arn can no longer express every valid setup. Neither key
+# falls back to the other; both are used exactly as given.
+cpu: 256
+memory: 512
+port: 8080
+task_role_arn: arn:aws:iam::123456789012:role/my-cluster_my-service
+execution_role_arn: arn:aws:iam::123456789012:role/my-cluster_my-service_execution
+envs:
+  - LOG_LEVEL: info

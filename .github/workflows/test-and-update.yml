@@ -23,8 +23,16 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
+    - name: Run role resolution tests
+      run: python tests/test_roles.py
+
     - name: Run tests and update expected outputs
       run: python tests/test.py
+      env:
+        # Allow this pass to regenerate expected outputs so the auto-commit step
+        # below can pick them up. The final gate re-runs without this, so a
+        # golden file that is missing from the PR still fails the build.
+        UPDATE_EXPECTED: '1'
 
     - name: Commit and push changes
       uses: stefanzweifel/git-auto-commit-action@v7
@@ -50,5 +58,8 @@ jobs:
 
     - name: Fail if tests failed
       run: |
-        # Re-run tests to ensure they pass after any updates
+        # Re-run tests to ensure they pass after any updates. Deliberately
+        # without UPDATE_EXPECTED, so a missing expected output is a failure
+        # rather than something the runner quietly fabricates.
         python tests/test.py
+        python tests/test_roles.py
