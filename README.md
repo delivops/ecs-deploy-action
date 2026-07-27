@@ -32,7 +32,7 @@ Deploy standalone task definitions that can be triggered manually or by external
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `environment` | The environment to deploy to | Yes | - |
+| `environment` | The environment to deploy to. Currently descriptive only — no step reads it. | Yes | - |
 | `deployment_type` | Deployment type: `service`, `scheduled_task`, or `triggerable_task` | No | `service` |
 | `ecs_service` | The name of the ECS service (required when `deployment_type=service`) | No | - |
 | `task_name` | The name of the task (required when `deployment_type=scheduled_task` or `triggerable_task`) | No | - |
@@ -44,7 +44,7 @@ Deploy standalone task definitions that can be triggered manually or by external
 | `ecs_cluster` | The name of the ECS cluster | Yes | - |
 | `aws_role` | The AWS IAM role to assume | No | `github_services` |
 | `dry_run` | Whether to perform a dry run | No | `false` |
-| `ecr_registry` | Use ECR registry for main container image | No | `true` |
+| `ecr_registry` | Prefix the main container image with the ECR registry. Sidecar images (OTEL, Fluent Bit) always use ECR regardless. | No | `true` |
 | `propagate_tags` | Where the service copies tags from when launching tasks (service mode only): `SERVICE` or `NONE` | No | `SERVICE` |
 
 ## Example Usage

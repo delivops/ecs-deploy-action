@@ -46,7 +46,7 @@ inputs:
     default: 'SERVICE'
     required: false
   ecr_registry:
-    description: 'The ECR registry URL'
+    description: 'Whether to prefix the main container image with the ECR registry ("true"/"false"). Sidecar images (OTEL, Fluent Bit) always use ECR regardless of this setting.'
     required: false
     default: 'true'
 

@@ -34,7 +34,7 @@ network_mode: bridge
 
 ### CPU/Memory Validation
 
-- **Fargate**: Strict validation with fixed CPU values (256, 512, 1024, 2048, 4096) and matching memory tiers
+- **Fargate**: Strict validation with fixed CPU values (256, 512, 1024, 2048, 4096, 8192, 16384) and matching memory tiers — see [CPU, Memory, and Architecture](architecture.md)
 - **EC2**: Flexible - any positive integer, or omit for container-level allocation
 
 ### Runtime Platform
@@ -80,9 +80,18 @@ This will generate port mappings with dynamic host ports:
 {
   "portMappings": [
     {
+      "name": "default",
       "containerPort": 8080,
       "hostPort": 0,
-      "protocol": "tcp"
+      "protocol": "tcp",
+      "appProtocol": "http"
+    },
+    {
+      "name": "metrics",
+      "containerPort": 9090,
+      "hostPort": 0,
+      "protocol": "tcp",
+      "appProtocol": "http"
     }
   ]
 }

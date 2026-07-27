@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       # Build and tag your image here
       - name: Deploy to ECS
-        uses: delivops/ecs-deploy-action@main
+        uses: delivops/ecs-deploy-action@v1
         with:
           environment: production
           ecs_service: my-service
@@ -59,4 +59,26 @@ health_check:
 ```
 
 > **`replica_count` sets the service's desired count on every deploy.** Omit it for services under
-> autoscaling, otherwise each deploy resets the running count to this value.
+> autoscaling, otherwise each deploy resets the running count to this value. Values that are not
+> non-negative integers are ignored with a warning rather than failing the deploy.
+
+## Other Container Options
+
+| Option | Default | Description |
+|---|---|---|
+| `stop_timeout` | unset | Seconds to wait for the container to exit before it is killed. |
+| `ephemeral_storage` | unset (AWS default 20) | Task ephemeral storage in GiB. |
+| `readonly_root_filesystem` | unset | Mounts the root filesystem read-only on **all** containers in the task, including sidecars. |
+| `writable_dirs` | `[]` | Paths to mount as empty writable volumes on **all** containers. Needed when `readonly_root_filesystem: true`. |
+| `secrets_files_path` | `/etc/secrets` | Where `secret_files` are written and mounted. See [Secrets](secrets.md). |
+| `app_protocol` | `http` | `appProtocol` for all port mappings. See [Ports](ports.md). |
+| `launch_type` / `network_mode` | `FARGATE` / `awsvpc` | See [EC2 Launch Type](ec2-launch-type.md). |
+| `linux_parameters` | unset | See [Linux Parameters](linux-parameters.md). |
+
+## Other Deployment Types
+
+This page covers `deployment_type: service`. For EventBridge-scheduled tasks
+(`scheduled_task`) and standalone task definitions (`triggerable_task`), see the
+[README](../README.md#deployment-types). Those types are not managed by
+`terraform-aws-ecs-service`, so their role ARNs must be set in YAML — see
+[Task and Execution Roles](roles.md#scheduled-and-triggerable-tasks).

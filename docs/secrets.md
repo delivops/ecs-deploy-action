@@ -7,11 +7,10 @@ You can inject secrets from AWS Secrets Manager as environment variables or down
 - `secrets_envs` (name-only): Auto-extract all keys from a secret as environment variables
 - `secret_files`: List of secret files to download to `/etc/secrets/`
 
-See the [full YAML example](../README.md#complete-yaml-configuration-example) for usage.
-
-# Secrets and Secret Files Example
-
-You can inject secrets from AWS Secrets Manager as environment variables or download secret files at runtime.
+> **`secrets` and `secrets_envs` are mutually exclusive.** If `secrets` is present and non-empty it
+> is used and `secrets_envs` is **ignored entirely**, with no warning. Pick one format per config —
+> and remember that under `services_overrides` both keys are appended to the base list, so a base
+> `secrets` block will shadow a per-service `secrets_envs` block.
 
 ## Classic Format
 
@@ -40,6 +39,13 @@ secrets_envs:
   - name: database-credentials  
   - name: oauth-config
 ```
+
+> **This format calls AWS at task-definition generation time**, so the deploy step needs
+> `secretsmanager:GetSecretValue` on each named secret. If the call fails — no credentials, expired
+> token, secret not found — the generator logs a warning and falls back to **placeholder keys and a
+> placeholder ARN** so local and offline runs still produce output. That means a credentials problem
+> in CI yields a task definition wired to secrets that do not exist rather than a failed deploy.
+> Prefer the `id` + `values` format when you want the config to be fully deterministic and offline.
 
 ### How it works:
 
