@@ -3,10 +3,12 @@
 Simplified test runner that processes each YAML file in examples/ directory,
 executes the generate_task_def.py script, and compares output against expected JSON files.
 
-A missing expected JSON is a FAILURE by default: otherwise a newly added example
-would pass vacuously on its first run and CI would auto-commit whatever it
-happened to produce, so the golden file could never catch a regression it was
-added to catch. Re-run with UPDATE_EXPECTED=1 to (re)generate missing files.
+A missing expected JSON is a FAILURE: otherwise a newly added example would pass
+vacuously on its first run against a file generated from that same run, so the
+golden could never catch the regression it was added to catch.
+
+To add an example, run this locally with UPDATE_EXPECTED=1, review the generated
+JSON, and commit it. CI never sets that flag.
 """
 
 import os

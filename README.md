@@ -215,6 +215,21 @@ Both roles are mandatory. If a slot cannot be resolved from any of the three sou
 
 See [docs/roles.md](./docs/roles.md) for the full details.
 
+### Replica Count
+
+`replica_count` sets the ECS service's desired count on every deploy. Omit it entirely for
+services under autoscaling — otherwise each deploy resets the running task count to the number in
+your YAML.
+
+> ⚠️ **This changed behavior.** `replica_count` never actually reached the deploy step before: it
+> was published with `::set-output`, which GitHub disabled in 2023, and written to stderr besides.
+> Deploys therefore always retained the service's live desired count, whatever the YAML said. It
+> now works as documented, so **any config that already sets `replica_count` will start enforcing
+> it.** Because `terraform-aws-ecs-service` sets `ignore_changes = [desired_count]`, nothing else
+> will correct a service that autoscaling had scaled up. Review your configs before upgrading.
+>
+> Values that are not positive integers are ignored with a warning rather than failing the deploy.
+
 ### Multi-Service YAML
 
 You can use a single YAML file for multiple services by defining shared defaults at the top level and service-specific overrides in a `services_overrides` section:

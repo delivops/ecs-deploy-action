@@ -26,13 +26,13 @@ jobs:
     - name: Run role resolution tests
       run: python tests/test_roles.py
 
-    - name: Run tests and update expected outputs
+    - name: Run task definition tests
+      # Deliberately without UPDATE_EXPECTED, so a missing expected output fails
+      # the build instead of being fabricated here and auto-committed - which
+      # would let a newly added example pass without ever being checked against
+      # anything. To add an example, run this locally with UPDATE_EXPECTED=1 and
+      # commit the generated file after reviewing it.
       run: python tests/test.py
-      env:
-        # Allow this pass to regenerate expected outputs so the auto-commit step
-        # below can pick them up. The final gate re-runs without this, so a
-        # golden file that is missing from the PR still fails the build.
-        UPDATE_EXPECTED: '1'
 
     - name: Commit and push changes
       uses: stefanzweifel/git-auto-commit-action@v7
@@ -58,8 +58,6 @@ jobs:
 
     - name: Fail if tests failed
       run: |
-        # Re-run tests to ensure they pass after any updates. Deliberately
-        # without UPDATE_EXPECTED, so a missing expected output is a failure
-        # rather than something the runner quietly fabricates.
+        # Re-run to ensure everything still passes after any auto-committed update.
         python tests/test.py
         python tests/test_roles.py

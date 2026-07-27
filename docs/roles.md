@@ -76,21 +76,34 @@ execution_role_arn: arn:aws:iam::123456789012:role/my-cluster_my-service_executi
 
 Here the task role comes from `role_arn` and the execution role is overridden.
 
-### Clearing a value in `services_overrides`
+## Clearing a value in `services_overrides`
 
 Setting a role key to YAML `null` **removes** it, so resolution falls through to the next
-precedence level rather than leaving the slot empty:
+precedence level rather than leaving the slot empty. This only does something when the base
+config sets the key in the first place:
 
 ```yaml
 role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+task_role_arn: arn:aws:iam::123456789012:role/my-cluster_shared-task
 
 services_overrides:
   api-service:
-    task_role_arn: arn:aws:iam::123456789012:role/my-cluster_api   # override
+    task_role_arn: arn:aws:iam::123456789012:role/my-cluster_api   # replace the base task role
   worker-service:
-    task_role_arn: null                                            # drop the override,
+    task_role_arn: null                                            # drop the base task role,
                                                                    # fall back to role_arn
 ```
+
+Resolves to:
+
+| Service | `taskRoleArn` | `executionRoleArn` |
+|---|---|---|
+| `api-service` | `my-cluster_api` | `ecsTaskExecutionRole` |
+| `worker-service` | `ecsTaskExecutionRole` | `ecsTaskExecutionRole` |
+| any other service | `my-cluster_shared-task` | `ecsTaskExecutionRole` |
+
+Note that `task_role_arn` narrows only the task slot — the execution slot keeps coming from
+`role_arn`.
 
 Watch out for `task_role_arn: no`, which YAML 1.1 parses as the boolean `false`. The action
 rejects it with an explanatory error rather than letting it fail somewhere downstream.
@@ -140,10 +153,14 @@ permissions.
 | Slot unresolved from all three sources | Fail, listing each source tried and how to fix it |
 | Both slots unresolved | Fail, reporting both at once |
 | No AWS credentials | Fail naming the missing parameters |
+| Credentials expired or invalid | Fail naming the error code |
+| No AWS region configured | Fail naming the region that was used |
+| SSM endpoint unreachable | Fail naming the region and the underlying network error |
 | `AccessDenied` | Fail naming `ssm:GetParameters` and the required resource ARN |
 | Throttled | Fail suggesting a retry |
 | Value is a role *name*, not an ARN | Fail — the module validates this on its side too |
 | Parameter exists but is empty | Treated as missing |
+| Value parsed as a YAML boolean (`no`, `off`) | Fail explaining the YAML 1.1 quirk |
 
 A note on why this is stricter than elsewhere in the action: `SecretManager` falls back to mock
 values when AWS is unreachable, which is tolerable for discovering secret *keys* during local

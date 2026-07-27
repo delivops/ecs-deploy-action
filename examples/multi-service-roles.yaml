@@ -1,19 +1,20 @@
 # Per-service role overrides.
 #
-# The base role_arn applies to every service; an override replaces it for that
-# service only. The override block below is keyed on "test-service" because the
-# test runner always passes that service name.
+# role_arn is the base for both slots; task_role_arn narrows the task slot only,
+# so executionRoleArn still comes from role_arn. The override block below is
+# keyed on "test-service" because the test runner always passes that name.
 cpu: 256
 memory: 512
 port: 8080
 role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+task_role_arn: arn:aws:iam::123456789012:role/my-cluster_shared-task
 envs:
   - LOG_LEVEL: info
 
 services_overrides:
   test-service:
+    # Replace the base task role for this service.
     task_role_arn: arn:aws:iam::123456789012:role/my-cluster_test-service
   worker-service:
-    # null removes the key, so this service falls back to the base role_arn
-    # (and then to SSM if that were unset too).
+    # null removes the base task_role_arn, so both slots fall back to role_arn.
     task_role_arn: null
