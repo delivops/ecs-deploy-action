@@ -42,7 +42,7 @@ Deploy standalone task definitions that can be triggered manually or by external
 | `aws_account_id` | The AWS account ID | Yes | - |
 | `aws_region` | The AWS region | Yes | - |
 | `ecs_cluster` | The name of the ECS cluster | Yes | - |
-| `aws_role` | The AWS IAM role to assume. Needs `ssm:GetParameters` when roles are discovered from SSM (see [Task and Execution Roles](#task-and-execution-roles)) | No | `github_services` |
+| `aws_role` | The AWS IAM role to assume | No | `github_services` |
 | `dry_run` | Whether to perform a dry run | No | `false` |
 | `ecr_registry` | Use ECR registry for main container image | No | `true` |
 | `propagate_tags` | Where the service copies tags from when launching tasks (service mode only): `SERVICE` or `NONE` | No | `SERVICE` |

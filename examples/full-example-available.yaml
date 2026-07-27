@@ -16,8 +16,7 @@ memory: 2048
 # CPU architecture (X86_64 or ARM64)
 cpu_arch: X86_64
 
-# IAM role used for both the task role and the execution role.
-# Optional, and can be split into task_role_arn / execution_role_arn - see docs/roles.md.
+# IAM role ARN for both task execution and task role
 role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
 
 # =============================================================================
