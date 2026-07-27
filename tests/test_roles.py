@@ -12,12 +12,14 @@ can raise the real exception classes and the taxonomy assertions stay honest.
 
 import contextlib
 import importlib.util
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 from botocore.exceptions import (
     ClientError, NoCredentialsError, TokenRetrievalError, NoRegionError,
-    EndpointConnectionError,
+    EndpointConnectionError, ConnectTimeoutError, CredentialRetrievalError,
 )
 
 # Whether the real boto3 was already loaded before any test ran, so the
@@ -226,7 +228,7 @@ def test_throttling():
         )
 
 
-def test_expired_token():
+def test_token_retrieval_error():
     ssm = FakeSSM(raises=TokenRetrievalError(provider='sts', error_msg='expired'))
     with patched_boto3(ssm):
         return expect_error(
@@ -234,6 +236,89 @@ def test_expired_token():
             gtd.RoleResolutionError,
             'credentials',
         )
+
+
+def test_expired_token_client_error():
+    error = ClientError(
+        {'Error': {'Code': 'ExpiredTokenException', 'Message': 'expired'}}, 'GetParameters')
+    ssm = FakeSSM(raises=error)
+    with patched_boto3(ssm):
+        return expect_error(
+            lambda: resolver().resolve({}),
+            gtd.RoleResolutionError,
+            'ExpiredTokenException', 'expired or invalid',
+        )
+
+
+def test_unrecognized_client_error():
+    error = ClientError(
+        {'Error': {'Code': 'InternalServerError', 'Message': 'boom'}}, 'GetParameters')
+    ssm = FakeSSM(raises=error)
+    with patched_boto3(ssm):
+        return expect_error(
+            lambda: resolver().resolve({}),
+            gtd.RoleResolutionError,
+            'InternalServerError', TASK_PARAM,
+        )
+
+
+def test_botocore_error_catch_all():
+    # ConnectTimeoutError is a BotoCoreError but NOT an EndpointConnectionError,
+    # so without the catch-all it would escape without an actionable message.
+    ssm = FakeSSM(raises=ConnectTimeoutError(endpoint_url='https://ssm.example'))
+    with patched_boto3(ssm):
+        return expect_error(
+            lambda: resolver().resolve({}),
+            gtd.RoleResolutionError,
+            'ConnectTimeoutError', 'task_role_arn',
+        )
+
+
+def test_credential_retrieval_error_caught():
+    # What the OIDC / SSO / assume-role providers raise; also a BotoCoreError.
+    ssm = FakeSSM(raises=CredentialRetrievalError(provider='sso', error_msg='nope'))
+    with patched_boto3(ssm):
+        return expect_error(
+            lambda: resolver().resolve({}),
+            gtd.RoleResolutionError,
+            'CredentialRetrievalError',
+        )
+
+
+def test_arn_with_embedded_whitespace_rejected():
+    return expect_error(
+        lambda: gtd.validate_config(
+            {'task_role_arn': 'arn:aws:iam::123456789012:role/x junk'}),
+        gtd.ValidationError,
+        'not an IAM role ARN',
+    )
+
+
+def test_govcloud_partition_accepted():
+    arn = 'arn:aws-us-gov:iam::123456789012:role/my-role'
+    try:
+        gtd.validate_config({'role_arn': arn})
+    except Exception as e:  # noqa: BLE001
+        return False, f"valid GovCloud ARN rejected: {type(e).__name__}: {e}"
+    return True, "non-commercial partitions and role paths accepted"
+
+
+def test_role_path_accepted():
+    arn = 'arn:aws:iam::123456789012:role/service-role/my-role'
+    try:
+        gtd.validate_config({'role_arn': arn})
+    except Exception as e:  # noqa: BLE001
+        return False, f"valid pathed ARN rejected: {type(e).__name__}: {e}"
+    return True, "role paths accepted"
+
+
+def test_provenance_names_the_real_key():
+    """A value from role_arn must not be reported as coming from task_role_arn."""
+    return expect_error(
+        lambda: resolver().resolve({'role_arn': 'not-an-arn'}),
+        gtd.RoleResolutionError,
+        "YAML key 'role_arn'",
+    )
 
 
 def test_no_region():
@@ -340,6 +425,84 @@ def test_validate_config_accepts_separate_arns():
     return True, "separate ARNs pass offline validation"
 
 
+@contextlib.contextmanager
+def captured_github_output():
+    """Point $GITHUB_OUTPUT at a temp file and yield a reader for it."""
+    fd, path = tempfile.mkstemp()
+    os.close(fd)
+    saved = os.environ.get('GITHUB_OUTPUT')
+    os.environ['GITHUB_OUTPUT'] = path
+    try:
+        yield lambda: open(path, encoding='utf-8').read()
+    finally:
+        if saved is None:
+            os.environ.pop('GITHUB_OUTPUT', None)
+        else:
+            os.environ['GITHUB_OUTPUT'] = saved
+        os.unlink(path)
+
+
+def check_replica_count(value, expected):
+    with captured_github_output() as read:
+        gtd.emit_replica_count(value)
+        written = read()
+    if written != f"replica_count={expected}\n":
+        return False, f"{value!r} wrote {written!r}, expected 'replica_count={expected}\\n'"
+    return True, f"{value!r} -> {expected!r}"
+
+
+def test_replica_count_positive():
+    return check_replica_count(3, '3')
+
+
+def test_replica_count_zero_is_valid():
+    # Scaling a service to zero is legitimate; it must not be treated as a typo.
+    return check_replica_count(0, '0')
+
+
+def test_replica_count_unset():
+    return check_replica_count('', '')
+
+
+def test_replica_count_rejects_non_numeric():
+    return check_replica_count('two', '')
+
+
+def test_replica_count_rejects_negative():
+    return check_replica_count(-1, '')
+
+
+def test_replica_count_rejects_underscore_literal():
+    # int('5_0') == 50 in Python; writing that would silently deploy 50 tasks.
+    return check_replica_count('5_0', '')
+
+
+def test_replica_count_rejects_non_ascii_digits():
+    # int() accepts these; GitHub Actions / parseInt would produce NaN.
+    return check_replica_count('٥', '')
+
+
+def test_replica_count_normalizes_leading_zeros():
+    return check_replica_count('007', '7')
+
+
+def test_replica_count_no_output_injection():
+    # A newline would otherwise let a config forge extra step outputs.
+    return check_replica_count('1\nfoo=bar', '')
+
+
+def test_replica_count_without_github_output():
+    saved = os.environ.pop('GITHUB_OUTPUT', None)
+    try:
+        gtd.emit_replica_count(3)
+    except Exception as e:  # noqa: BLE001
+        return False, f"raised outside GitHub Actions: {type(e).__name__}: {e}"
+    finally:
+        if saved is not None:
+            os.environ['GITHUB_OUTPUT'] = saved
+    return True, "no-op outside GitHub Actions"
+
+
 TESTS = [
     ("both slots from SSM in one call", test_both_from_ssm),
     ("role_arn skips SSM", test_role_arn_skips_ssm),
@@ -350,7 +513,11 @@ TESTS = [
     ("no credentials fails without mock fallback", test_no_credentials_fails_without_mock),
     ("access denied names ssm:GetParameters", test_access_denied),
     ("throttling suggests a retry", test_throttling),
-    ("expired token reported as credentials", test_expired_token),
+    ("token retrieval failure reported as credentials", test_token_retrieval_error),
+    ("ExpiredTokenException reported", test_expired_token_client_error),
+    ("unmapped ClientError still actionable", test_unrecognized_client_error),
+    ("BotoCoreError catch-all (connect timeout)", test_botocore_error_catch_all),
+    ("credential provider failure caught", test_credential_retrieval_error_caught),
     ("missing region reported", test_no_region),
     ("unreachable endpoint reported", test_endpoint_unreachable),
     ("YAML-only resolution stays offline", test_yaml_only_stays_offline),
@@ -359,9 +526,23 @@ TESTS = [
     ("bare role name from SSM rejected", test_bare_role_name_from_ssm_rejected),
     ("empty SSM value treated as missing", test_empty_ssm_value_treated_as_missing),
     ("bare role name in YAML rejected", test_bare_role_name_in_yaml_rejected),
+    ("ARN with embedded whitespace rejected", test_arn_with_embedded_whitespace_rejected),
+    ("GovCloud partition accepted", test_govcloud_partition_accepted),
+    ("role path accepted", test_role_path_accepted),
+    ("error names the key the user actually set", test_provenance_names_the_real_key),
     ("YAML boolean trap explained", test_yaml_boolean_trap),
     ("empty role_arn falls through to SSM", test_empty_string_falls_through),
     ("validate_config accepts separate ARNs", test_validate_config_accepts_separate_arns),
+    ("replica_count: positive integer", test_replica_count_positive),
+    ("replica_count: zero is valid", test_replica_count_zero_is_valid),
+    ("replica_count: unset", test_replica_count_unset),
+    ("replica_count: non-numeric rejected", test_replica_count_rejects_non_numeric),
+    ("replica_count: negative rejected", test_replica_count_rejects_negative),
+    ("replica_count: '5_0' rejected", test_replica_count_rejects_underscore_literal),
+    ("replica_count: non-ASCII digits rejected", test_replica_count_rejects_non_ascii_digits),
+    ("replica_count: leading zeros normalized", test_replica_count_normalizes_leading_zeros),
+    ("replica_count: no output injection", test_replica_count_no_output_injection),
+    ("replica_count: no-op without GITHUB_OUTPUT", test_replica_count_without_github_output),
 ]
 
 

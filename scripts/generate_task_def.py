@@ -32,6 +32,9 @@ class RoleResolutionError(Exception):
 # YAML keys that hold an IAM role ARN, in no particular order.
 ROLE_ARN_KEYS = ('role_arn', 'task_role_arn', 'execution_role_arn')
 
+# arn:<partition>:iam::<12-digit account>:role/<path and name, no whitespace>
+ROLE_ARN_PATTERN = re.compile(r'^arn:aws[a-z0-9-]*:iam::\d{12}:role/\S+$')
+
 def setup_logging(level: str = "INFO") -> logging.Logger:
     """Setup logging configuration"""
     logging.basicConfig(
@@ -73,7 +76,7 @@ def validate_role_arn(value: str, source: str,
     The Terraform module validates the same thing on its side ("must be a full
     IAM role ARN, not a role name"), so a bare name here is a real mistake.
     """
-    if not value.startswith('arn:') or ':role/' not in value:
+    if not ROLE_ARN_PATTERN.match(value):
         raise error_cls(
             f"{source} is not an IAM role ARN: '{value}'. Expected "
             f"arn:aws:iam::<account-id>:role/<name>."
@@ -454,15 +457,20 @@ class RoleResolver:
         pending: Dict[str, tuple] = {}  # ssm parameter name -> (td_key, yaml_key)
 
         for yaml_key, td_key, suffix in self.SLOTS:
-            value = normalize_role_value(config, yaml_key, RoleResolutionError) or shared
+            # Track which key actually supplied the value, so the log line and
+            # any error name a key the user can really find in their YAML.
+            value = normalize_role_value(config, yaml_key, RoleResolutionError)
+            source_key = yaml_key
+            if value is None:
+                value, source_key = shared, 'role_arn'
 
             if value is None:
                 pending[self._ssm_name(suffix)] = (td_key, yaml_key)
                 continue
 
-            validate_role_arn(value, f"YAML key '{yaml_key}'", RoleResolutionError)
+            validate_role_arn(value, f"YAML key '{source_key}'", RoleResolutionError)
             resolved[td_key] = value
-            self.logger.info(f"{td_key} taken from YAML key '{yaml_key}'")
+            self.logger.info(f"{td_key} taken from YAML key '{source_key}'")
 
         if pending:
             resolved.update(self._resolve_from_ssm(pending))
@@ -477,11 +485,19 @@ class RoleResolver:
         """Batch-read the outstanding role ARNs from SSM Parameter Store."""
         # Imported lazily so a fully YAML-configured deploy needs neither boto3
         # nor AWS credentials. The test suite relies on this.
-        import boto3
-        from botocore.exceptions import (
-            ClientError, NoCredentialsError, PartialCredentialsError,
-            TokenRetrievalError, NoRegionError, EndpointConnectionError,
-        )
+        try:
+            import boto3
+            from botocore.exceptions import (
+                BotoCoreError, ClientError, NoCredentialsError,
+                PartialCredentialsError, TokenRetrievalError, NoRegionError,
+                EndpointConnectionError,
+            )
+        except ImportError as e:
+            raise RoleResolutionError(
+                f"boto3 is required to read role ARNs from SSM but could not be "
+                f"imported ({e}). Install requirements.txt, or set task_role_arn / "
+                f"execution_role_arn (or role_arn) in the task config YAML."
+            ) from e
 
         names = sorted(pending)
         joined = ', '.join(names)
@@ -508,6 +524,16 @@ class RoleResolver:
             ) from e
         except ClientError as e:
             raise self._client_error(e, names) from e
+        except BotoCoreError as e:
+            # Catch-all for the rest of botocore's tree: connect/read timeouts,
+            # SSL and proxy failures, credential-provider errors, bad profiles.
+            # ClientError is not a BotoCoreError subclass, so this cannot shadow
+            # the taxonomy above.
+            raise RoleResolutionError(
+                f"Failed to read role ARNs from SSM ({joined}): "
+                f"{type(e).__name__}: {e}. Alternatively set task_role_arn / "
+                f"execution_role_arn (or role_arn) in the task config YAML."
+            ) from e
 
         # Names that do not exist are returned in InvalidParameters rather than
         # raising - ParameterNotFound is an error shape of GetParameter
@@ -1509,13 +1535,15 @@ def emit_replica_count(replica_count: Any) -> None:
 
     if value:
         # Guard against a typo like `replica_count: two` becoming an opaque
-        # failure inside the deploy action.
-        try:
-            if int(value) <= 0:
-                raise ValueError
-        except ValueError:
+        # failure inside the deploy action. Deliberately stricter than int():
+        # that accepts "5_0" as 50 and non-ASCII digits that GitHub Actions
+        # would then hand to the deploy step as garbage. Zero is valid - it is
+        # how a service is scaled down.
+        if re.fullmatch(r'[0-9]+', value):
+            value = str(int(value))  # normalize e.g. "007" -> "7"
+        else:
             logger.warning(
-                f"Ignoring replica_count={value!r}: expected a positive integer. "
+                f"Ignoring replica_count={value!r}: expected a non-negative integer. "
                 f"The service's current desired count will be left unchanged."
             )
             value = ''

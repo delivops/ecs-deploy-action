@@ -71,9 +71,14 @@ def run_script_for_yaml(yaml_file, script_path):
         service_name
     ]
     
+    # Drop GITHUB_OUTPUT so the script's replica_count output does not append to
+    # the CI step's real output file once per example.
+    env = {k: v for k, v in os.environ.items() if k != 'GITHUB_OUTPUT'}
+
     try:
         print(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=get_project_root())
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                cwd=get_project_root(), env=env)
         
         if result.returncode != 0:
             print(f"Script failed with return code {result.returncode}")
