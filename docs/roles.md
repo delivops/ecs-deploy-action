@@ -7,9 +7,8 @@ An ECS task definition carries two IAM roles:
 | `taskRoleArn` | your application code, inside the container | the AWS APIs your app calls (S3, SQS, DynamoDB…) |
 | `executionRoleArn` | the ECS agent, before your container starts | pulling the image from ECR, writing `awslogs`, reading secrets |
 
-They are different identities with different jobs. A task can legitimately have an execution role
-and no task role — an app that calls no AWS APIs needs nothing at runtime, but ECS still needs
-permission to start it.
+They are different identities with different jobs, and both are required. The same ARN may be used
+for both, but neither slot may be left empty.
 
 ## Why this changed
 
@@ -39,7 +38,7 @@ The SSM lookup is a single batched `GetParameters` call, and it is skipped entir
 slots are already resolved from YAML — a fully YAML-configured deploy makes no AWS calls to
 resolve roles.
 
-## The four configurations
+## The three configurations
 
 ### 1. Discovered from SSM (recommended for module-managed services)
 
@@ -77,30 +76,10 @@ execution_role_arn: arn:aws:iam::123456789012:role/my-cluster_my-service_executi
 
 Here the task role comes from `role_arn` and the execution role is overridden.
 
-### 4. No role in a slot
+### Clearing a value in `services_overrides`
 
-```yaml
-task_role_arn: none
-execution_role_arn: arn:aws:iam::123456789012:role/my-cluster_my-service_execution
-```
-
-`none` (case-insensitive) omits the key from the task definition and skips its SSM lookup. Use it
-when the module is configured with `task_role = {}`, which creates no role and therefore publishes
-no parameter — without the sentinel the deploy would fail looking for something that was never
-meant to exist.
-
-Omitting `executionRoleArn` is allowed but logs a warning: the action always attaches an `awslogs`
-log configuration, so a Fargate task without an execution role cannot start.
-
-### `null` is not `none`
-
-In a `services_overrides` block these mean opposite things:
-
-| Value | Parsed as | Meaning |
-|---|---|---|
-| `task_role_arn: null` (or `~`, or empty) | YAML null | **Remove the key** — fall through to `role_arn`, then SSM |
-| `task_role_arn: none` | the string `"none"` | **No role** — omit from the task definition, skip SSM |
-| `task_role_arn: no` | the boolean `false` | **Rejected** with an explanatory error (YAML 1.1 quirk) |
+Setting a role key to YAML `null` **removes** it, so resolution falls through to the next
+precedence level rather than leaving the slot empty:
 
 ```yaml
 role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
@@ -109,11 +88,12 @@ services_overrides:
   api-service:
     task_role_arn: arn:aws:iam::123456789012:role/my-cluster_api   # override
   worker-service:
-    task_role_arn: none                                            # no task role
-  batch-service:
-    task_role_arn: null                                            # ignore any base value,
-                                                                   # fall back to SSM
+    task_role_arn: null                                            # drop the override,
+                                                                   # fall back to role_arn
 ```
+
+Watch out for `task_role_arn: no`, which YAML 1.1 parses as the boolean `false`. The action
+rejects it with an explanatory error rather than letting it fail somewhere downstream.
 
 ## IAM prerequisite
 
@@ -176,5 +156,4 @@ deploy, so `RoleResolver` never substitutes a fallback value.
 |---|---|
 | [`examples/separate-roles.yaml`](../examples/separate-roles.yaml) | distinct task and execution roles |
 | [`examples/role-arn-with-override.yaml`](../examples/role-arn-with-override.yaml) | shared `role_arn` with one slot overridden |
-| [`examples/no-task-role.yaml`](../examples/no-task-role.yaml) | `none` sentinel |
 | [`examples/multi-service-roles.yaml`](../examples/multi-service-roles.yaml) | per-service role overrides |

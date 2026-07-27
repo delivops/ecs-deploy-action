@@ -29,11 +29,6 @@ class RoleResolutionError(Exception):
     """
     pass
 
-# Literal YAML value meaning "this task deliberately has no role in this slot".
-# It cannot be YAML null: merge_configs() already gives an explicit null the
-# meaning "delete this key", i.e. fall through to the next precedence level.
-ROLE_OPT_OUT = "none"
-
 # YAML keys that hold an IAM role ARN, in no particular order.
 ROLE_ARN_KEYS = ('role_arn', 'task_role_arn', 'execution_role_arn')
 
@@ -62,12 +57,11 @@ def normalize_role_value(config: Dict[str, Any], key: str,
     if raw is None:
         return None
     if isinstance(raw, bool):
-        # YAML 1.1 resolves bare no/off/yes/on to booleans, so "role: no"
-        # arrives here as False. The user almost certainly meant the sentinel.
+        # YAML 1.1 resolves bare no/off/yes/on to booleans, so an unquoted value
+        # can arrive here as False and produce a baffling downstream error.
         raise error_cls(
             f"{key} was read as the boolean {raw}. YAML treats bare no/off/yes/on "
-            f"as booleans - use the literal string '{ROLE_OPT_OUT}' to omit the "
-            f"role, or quote the ARN."
+            f"as booleans - quote the value, and set it to a full IAM role ARN."
         )
     value = str(raw).strip()
     return value or None
@@ -82,8 +76,7 @@ def validate_role_arn(value: str, source: str,
     if not value.startswith('arn:') or ':role/' not in value:
         raise error_cls(
             f"{source} is not an IAM role ARN: '{value}'. Expected "
-            f"arn:aws:iam::<account-id>:role/<name>, or '{ROLE_OPT_OUT}' to omit "
-            f"the role."
+            f"arn:aws:iam::<account-id>:role/<name>."
         )
 
 def validate_config(config: Dict[str, Any]) -> None:
@@ -148,7 +141,7 @@ def validate_config(config: Dict[str, Any]) -> None:
     # entirely offline while still catching typos and bare role names.
     for key in ROLE_ARN_KEYS:
         value = normalize_role_value(config, key)
-        if value is None or value.lower() == ROLE_OPT_OUT:
+        if value is None:
             continue
         validate_role_arn(value, f"YAML key '{key}'")
 
@@ -431,9 +424,7 @@ class RoleResolver:
     reusing one ARN for both happened to work. v3 made them independent
     identities, so each slot is resolved on its own.
 
-    The literal string "none" at level 1 or 2 means "omit this key from the task
-    definition"; SSM is not consulted for that slot. This exists because the
-    module permits task_role = {} (no role, and therefore no SSM parameter).
+    Both slots are mandatory: every task has a task role and an execution role.
 
     Unlike SecretManager below, this class NEVER substitutes mock values. An
     unresolved slot, or any AWS fault, is a hard failure - a task definition
@@ -455,8 +446,7 @@ class RoleResolver:
     def resolve(self, config: Dict[str, Any]) -> Dict[str, str]:
         """Return the task-definition role keys mapped to their ARNs.
 
-        Slots that were explicitly opted out are absent from the result, so the
-        caller can splat this straight into the task definition dict.
+        The caller can splat the result straight into the task definition dict.
         """
         shared = normalize_role_value(config, 'role_arn', RoleResolutionError)
 
@@ -468,16 +458,6 @@ class RoleResolver:
 
             if value is None:
                 pending[self._ssm_name(suffix)] = (td_key, yaml_key)
-                continue
-
-            if value.lower() == ROLE_OPT_OUT:
-                self.logger.info(f"{td_key}: omitted (opted out with '{ROLE_OPT_OUT}')")
-                if td_key == "executionRoleArn":
-                    self.logger.warning(
-                        "executionRoleArn is omitted. Without an execution role ECS "
-                        "cannot pull from ECR, write awslogs or read secrets, so this "
-                        "task definition will fail to launch on Fargate."
-                    )
                 continue
 
             validate_role_arn(value, f"YAML key '{yaml_key}'", RoleResolutionError)
@@ -604,9 +584,7 @@ class RoleResolver:
                 f"  Fix one of:\n"
                 f"    * set '{yaml_key}' (or 'role_arn') in the task config YAML; or\n"
                 f"    * let terraform-aws-ecs-service create the role - it publishes\n"
-                f"      {name} automatically; or\n"
-                f"    * set '{yaml_key}: {ROLE_OPT_OUT}' if this task deliberately has no\n"
-                f"      role in that slot.\n"
+                f"      {name} automatically.\n"
                 f"  Note: scheduled_task and triggerable_task deployments are not managed\n"
                 f"  by the ECS service module and have no such SSM parameter - set the\n"
                 f"  role ARNs in YAML for those."

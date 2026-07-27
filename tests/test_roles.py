@@ -173,7 +173,7 @@ def test_missing_parameter_fails():
         return expect_error(
             lambda: resolver().resolve({}),
             gtd.RoleResolutionError,
-            TASK_PARAM, 'task_role_arn', 'ssm:GetParameters', 'none',
+            TASK_PARAM, 'task_role_arn', 'ssm:GetParameters',
         )
 
 
@@ -256,37 +256,25 @@ def test_endpoint_unreachable():
         )
 
 
-def test_opt_out_omits_key():
-    ssm = FakeSSM({EXEC_PARAM: EXEC_ARN})
-    with patched_boto3(ssm):
-        result = resolver().resolve({'task_role_arn': 'none'})
-    if 'taskRoleArn' in result:
-        return False, f"taskRoleArn should be absent, got {result}"
-    if result != {'executionRoleArn': EXEC_ARN}:
-        return False, f"unexpected result: {result}"
-    if ssm.calls != [[EXEC_PARAM]]:
-        return False, f"opted-out slot must not be fetched, got {ssm.calls}"
-    return True, "'none' omits the key and skips its SSM lookup"
-
-
-def test_opt_out_is_case_insensitive():
-    ssm = FakeSSM()
-    with patched_boto3(ssm):
-        result = resolver().resolve({'role_arn': 'None'})
-    if result != {}:
-        return False, f"expected no role keys, got {result}"
-    return True, "'None' is accepted as the sentinel"
-
-
-def test_both_opted_out_stays_offline():
+def test_yaml_only_stays_offline():
     # Deliberately unpatched: if the resolver reached for SSM here it would
     # import the real boto3, which this assertion would catch.
-    result = resolver().resolve({'role_arn': 'none'})
-    if result != {}:
-        return False, f"expected no role keys, got {result}"
+    result = resolver().resolve({'role_arn': SHARED_ARN})
+    if result != {'taskRoleArn': SHARED_ARN, 'executionRoleArn': SHARED_ARN}:
+        return False, f"unexpected result: {result}"
     if not BOTO3_PRELOADED and 'boto3' in sys.modules:
-        return False, "boto3 was imported despite both slots being opted out"
-    return True, "fully offline when both slots opt out"
+        return False, "boto3 was imported despite both slots resolving from YAML"
+    return True, "fully offline when both slots come from YAML"
+
+
+def test_sentinel_string_rejected():
+    # 'none' is not special: a role is always required, so it must be rejected
+    # as the non-ARN it is rather than silently omitting the key.
+    return expect_error(
+        lambda: gtd.validate_config({'task_role_arn': 'none'}),
+        gtd.ValidationError,
+        'not an IAM role ARN',
+    )
 
 
 def test_key_order_is_stable():
@@ -331,7 +319,7 @@ def test_yaml_boolean_trap():
     return expect_error(
         lambda: gtd.validate_config({'task_role_arn': False}),
         gtd.ValidationError,
-        'boolean', 'none',
+        'boolean', 'quote the value',
     )
 
 
@@ -344,12 +332,12 @@ def test_empty_string_falls_through():
     return True, "an empty role_arn falls through to SSM instead of emitting ''"
 
 
-def test_validate_config_accepts_opt_out():
+def test_validate_config_accepts_separate_arns():
     try:
-        gtd.validate_config({'task_role_arn': 'none', 'execution_role_arn': SHARED_ARN})
+        gtd.validate_config({'task_role_arn': TASK_ARN, 'execution_role_arn': EXEC_ARN})
     except Exception as e:  # noqa: BLE001
         return False, f"unexpected error: {type(e).__name__}: {e}"
-    return True, "'none' passes offline validation"
+    return True, "separate ARNs pass offline validation"
 
 
 TESTS = [
@@ -365,16 +353,15 @@ TESTS = [
     ("expired token reported as credentials", test_expired_token),
     ("missing region reported", test_no_region),
     ("unreachable endpoint reported", test_endpoint_unreachable),
-    ("'none' omits the key", test_opt_out_omits_key),
-    ("'none' is case-insensitive", test_opt_out_is_case_insensitive),
-    ("both opted out stays offline", test_both_opted_out_stays_offline),
+    ("YAML-only resolution stays offline", test_yaml_only_stays_offline),
+    ("'none' is rejected, not treated as a sentinel", test_sentinel_string_rejected),
     ("key order is stable", test_key_order_is_stable),
     ("bare role name from SSM rejected", test_bare_role_name_from_ssm_rejected),
     ("empty SSM value treated as missing", test_empty_ssm_value_treated_as_missing),
     ("bare role name in YAML rejected", test_bare_role_name_in_yaml_rejected),
     ("YAML boolean trap explained", test_yaml_boolean_trap),
     ("empty role_arn falls through to SSM", test_empty_string_falls_through),
-    ("validate_config accepts 'none'", test_validate_config_accepts_opt_out),
+    ("validate_config accepts separate ARNs", test_validate_config_accepts_separate_arns),
 ]
 
 

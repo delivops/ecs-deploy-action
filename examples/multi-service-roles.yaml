@@ -14,4 +14,6 @@ services_overrides:
   test-service:
     task_role_arn: arn:aws:iam::123456789012:role/my-cluster_test-service
   worker-service:
-    task_role_arn: none
+    # null removes the key, so this service falls back to the base role_arn
+    # (and then to SSM if that were unset too).
+    task_role_arn: null

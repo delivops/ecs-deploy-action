@@ -202,14 +202,8 @@ task_role_arn: arn:aws:iam::123456789012:role/my-cluster_my-service
 execution_role_arn: arn:aws:iam::123456789012:role/my-cluster_my-service_execution
 ```
 
-If a slot cannot be resolved from any of the three sources, the deploy **fails** rather than
-registering a task definition with a missing role. To declare that a slot deliberately has no
-role — matching a module config of `task_role = {}`, which creates no role and publishes no
-parameter — use the literal string `none`:
-
-```yaml
-task_role_arn: none   # omit taskRoleArn entirely
-```
+Both roles are mandatory. If a slot cannot be resolved from any of the three sources, the deploy
+**fails** rather than registering a task definition with a missing role.
 
 **Requirements and caveats:**
 
@@ -258,11 +252,9 @@ services_overrides:
 | Objects (`health_check`, `otel_collector`) | Service object completely replaces base |
 | Null values | Removes the field from configuration |
 
-> **`null` vs `none` for role fields.** `task_role_arn: null` *removes* the key, so resolution
-> falls through to `role_arn` and then to SSM. `task_role_arn: none` is the string sentinel
-> meaning *no role at all* — the key is omitted from the task definition and SSM is not consulted.
-> Beware `task_role_arn: no`, which YAML parses as the boolean `false`; the action rejects it with
-> an explanatory error.
+> **Clearing a role field.** `task_role_arn: null` *removes* the key, so resolution falls through
+> to `role_arn` and then to SSM. Beware `task_role_arn: no`, which YAML parses as the boolean
+> `false`; the action rejects it with an explanatory error.
 
 The service name passed to the action (via `ecs_service` or `task_name`) determines which overrides are applied. Services not listed in `services_overrides` use the base configuration.
 

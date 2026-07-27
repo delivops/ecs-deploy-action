@@ -23,8 +23,8 @@ cpu_arch: X86_64
 #   /ecs/<cluster>/<service>/task-role
 #   /ecs/<cluster>/<service>/execution-role
 #
-# The two slots can also be set separately (a per-slot key wins over role_arn),
-# or set to the literal "none" to omit that role entirely. See docs/roles.md.
+# The two slots can also be set separately, and a per-slot key wins over
+# role_arn. See docs/roles.md.
 #   task_role_arn: arn:aws:iam::123456789012:role/my-cluster_my-service
 #   execution_role_arn: arn:aws:iam::123456789012:role/my-cluster_my-service_execution
 role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
