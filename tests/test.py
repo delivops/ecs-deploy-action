@@ -2,7 +2,13 @@
 """
 Simplified test runner that processes each YAML file in examples/ directory,
 executes the generate_task_def.py script, and compares output against expected JSON files.
-If expected JSON doesn't exist, it creates it.
+
+A missing expected JSON is a FAILURE: otherwise a newly added example would pass
+vacuously on its first run against a file generated from that same run, so the
+golden could never catch the regression it was added to catch.
+
+To add an example, run this locally with UPDATE_EXPECTED=1, review the generated
+JSON, and commit it. CI never sets that flag.
 """
 
 import os
@@ -27,6 +33,10 @@ def get_examples_dir():
 def get_expected_outputs_dir():
     """Get the expected outputs directory."""
     return get_script_dir() / "expected_outputs"
+
+def update_expected():
+    """Whether missing expected-output files may be generated on this run."""
+    return os.environ.get('UPDATE_EXPECTED') == '1'
 
 def get_script_path():
     """Get the path to the generate_task_def.py script."""
@@ -61,13 +71,18 @@ def run_script_for_yaml(yaml_file, script_path):
         service_name
     ]
     
-    # The generator refuses to substitute mock secret values unless explicitly
-    # allowed. Tests run without AWS credentials, so opt in here (and only here).
-    env = {**os.environ, "ECS_DEPLOY_ALLOW_MOCK_SECRETS": "1"}
+    # Build the child env with two test-only adjustments:
+    #  - Drop GITHUB_OUTPUT so the script's replica_count output does not append
+    #    to the CI step's real output file once per example.
+    #  - The generator refuses to substitute mock secret values unless explicitly
+    #    allowed. Tests run without AWS credentials, so opt in here (and only here).
+    env = {k: v for k, v in os.environ.items() if k != 'GITHUB_OUTPUT'}
+    env["ECS_DEPLOY_ALLOW_MOCK_SECRETS"] = "1"
 
     try:
         print(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=get_project_root(), env=env)
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                cwd=get_project_root(), env=env)
 
         if result.returncode != 0:
             print(f"Script failed with return code {result.returncode}")
@@ -189,11 +204,6 @@ def main():
     
     print(f"Found {len(yaml_files)} YAML files")
     
-    # In CI, a missing expected-output file is a failure: the baseline must be
-    # committed and reviewed, not silently generated from whatever the script
-    # currently emits. Locally, auto-create for convenience.
-    ci_mode = os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS") or "--check" in sys.argv
-
     failed_tests = []
     created_files = []
 
@@ -217,9 +227,9 @@ def main():
         expected_output = load_expected_json(expected_json_file)
         
         if expected_output is None:
-            if ci_mode:
-                print(f"❌ FAILED: {yaml_file.name} - No expected output baseline "
-                      f"({json_filename}). Generate and commit it locally first.")
+            if not update_expected():
+                print(f"❌ FAILED: {yaml_file.name} - no expected output committed at "
+                      f"{json_filename} (re-run with UPDATE_EXPECTED=1 to create it)")
                 failed_tests.append(yaml_file.name)
             elif save_json_output(actual_output, expected_json_file):
                 print(f"✅ CREATED: {yaml_file.name} - Expected output file created")
