@@ -71,47 +71,34 @@ def run_script_for_yaml(yaml_file, script_path):
         service_name
     ]
     
-    # Drop GITHUB_OUTPUT so the script's replica_count output does not append to
-    # the CI step's real output file once per example.
+    # Build the child env with two test-only adjustments:
+    #  - Drop GITHUB_OUTPUT so the script's replica_count output does not append
+    #    to the CI step's real output file once per example.
+    #  - The generator refuses to substitute mock secret values unless explicitly
+    #    allowed. Tests run without AWS credentials, so opt in here (and only here).
     env = {k: v for k, v in os.environ.items() if k != 'GITHUB_OUTPUT'}
+    env["ECS_DEPLOY_ALLOW_MOCK_SECRETS"] = "1"
 
     try:
         print(f"Running: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True,
                                 cwd=get_project_root(), env=env)
-        
+
         if result.returncode != 0:
             print(f"Script failed with return code {result.returncode}")
             print(f"STDERR: {result.stderr}")
             print(f"STDOUT: {result.stdout}")
             return None
-        
-        # Parse the JSON output from stdout
+
+        # The generator prints the task definition JSON (and nothing else) to stdout;
+        # all logs go to stderr.
         try:
-            # The script prints the JSON between specific markers
-            lines = result.stdout.split('\n')
-            json_start = None
-            json_end = None
-            
-            for i, line in enumerate(lines):
-                if "----- Task Definition -----" in line:
-                    json_start = i + 1
-                elif "---------------------------" in line and json_start is not None:
-                    json_end = i
-                    break
-            
-            if json_start is not None and json_end is not None:
-                json_text = '\n'.join(lines[json_start:json_end])
-                return json.loads(json_text)
-            else:
-                # Fallback: try to parse the entire stdout as JSON
-                return json.loads(result.stdout)
-                
+            return json.loads(result.stdout)
         except json.JSONDecodeError as e:
             print(f"Failed to parse JSON output: {e}")
             print(f"Output was: {result.stdout}")
             return None
-            
+
     except Exception as e:
         print(f"Exception running script: {e}")
         return None
@@ -219,7 +206,7 @@ def main():
     
     failed_tests = []
     created_files = []
-    
+
     for yaml_file in yaml_files:
         print(f"\n{'='*60}")
         print(f"Processing: {yaml_file.name}")

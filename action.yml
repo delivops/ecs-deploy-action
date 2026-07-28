@@ -46,7 +46,7 @@ inputs:
     default: 'SERVICE'
     required: false
   ecr_registry:
-    description: 'The ECR registry URL'
+    description: "Whether the main application image lives in the account's ECR registry. Set to 'true' (default) to prefix the image with the ECR registry URL; set to 'false' for a public/external image. OTEL and Fluent Bit sidecars always use ECR regardless of this flag."
     required: false
     default: 'true'
 
@@ -61,43 +61,62 @@ runs:
     - id: login_ecr
       uses: aws-actions/amazon-ecr-login@v2
     - id: define-registry
+      env:
+        ECR_REGISTRY: ${{ steps.login_ecr.outputs.registry }}
+        USE_ECR_REGISTRY: ${{ inputs.ecr_registry }}
       run: |
         # Always set registry for OTEL/Fluent Bit (they're always ECR)
-        echo "registry=${{ steps.login_ecr.outputs.registry }}" >> $GITHUB_OUTPUT
-        
+        echo "registry=$ECR_REGISTRY" >> "$GITHUB_OUTPUT"
+
         # Set container_registry only if ecr_registry is true (for main app)
-        if [ "${{ inputs.ecr_registry }}" == "true" ]; then
-          echo "container_registry=${{ steps.login_ecr.outputs.registry }}" >> $GITHUB_OUTPUT
+        if [ "$USE_ECR_REGISTRY" == "true" ]; then
+          echo "container_registry=$ECR_REGISTRY" >> "$GITHUB_OUTPUT"
         else
-          echo "container_registry=" >> $GITHUB_OUTPUT
+          echo "container_registry=" >> "$GITHUB_OUTPUT"
         fi
       shell: bash
 
     - id: install_dependencies
+      env:
+        ACTION_PATH: ${{ github.action_path }}
       run: |
-        python3 -m pip install -r ${{ github.action_path }}/requirements.txt
+        python3 -m pip install -r "$ACTION_PATH/requirements.txt"
       shell: bash
 
     - id: determine-name
+      env:
+        DEPLOYMENT_TYPE: ${{ inputs.deployment_type }}
+        TASK_NAME: ${{ inputs.task_name }}
+        ECS_SERVICE: ${{ inputs.ecs_service }}
       run: |
-        if [ "${{ inputs.deployment_type }}" == "scheduled_task" ] || [ "${{ inputs.deployment_type }}" == "triggerable_task" ]; then
-          echo "name=${{ inputs.task_name }}" >> $GITHUB_OUTPUT
+        if [ "$DEPLOYMENT_TYPE" == "scheduled_task" ] || [ "$DEPLOYMENT_TYPE" == "triggerable_task" ]; then
+          echo "name=$TASK_NAME" >> "$GITHUB_OUTPUT"
         else
-          echo "name=${{ inputs.ecs_service }}" >> $GITHUB_OUTPUT
+          echo "name=$ECS_SERVICE" >> "$GITHUB_OUTPUT"
         fi
       shell: bash
 
     - id: generate-task-def
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        TASK_CONFIG_YAML: ${{ inputs.task_config_yaml }}
+        ECS_CLUSTER: ${{ inputs.ecs_cluster }}
+        AWS_REGION: ${{ inputs.aws_region }}
+        REGISTRY: ${{ steps.define-registry.outputs.registry }}
+        CONTAINER_REGISTRY: ${{ steps.define-registry.outputs.container_registry }}
+        IMAGE_NAME: ${{ inputs.image_name }}
+        TAG: ${{ inputs.tag }}
+        DEPLOY_NAME: ${{ steps.determine-name.outputs.name }}
       run: |
-        python3 ${{ github.action_path }}/scripts/generate_task_def.py \
-          "${{ inputs.task_config_yaml }}" \
-          "${{ inputs.ecs_cluster }}" \
-          "${{ inputs.aws_region }}" \
-          "${{ steps.define-registry.outputs.registry }}" \
-          "${{ steps.define-registry.outputs.container_registry }}" \
-          "${{ inputs.image_name }}" \
-          "${{ inputs.tag }}" \
-          "${{ steps.determine-name.outputs.name }}"
+        python3 "$ACTION_PATH/scripts/generate_task_def.py" \
+          "$TASK_CONFIG_YAML" \
+          "$ECS_CLUSTER" \
+          "$AWS_REGION" \
+          "$REGISTRY" \
+          "$CONTAINER_REGISTRY" \
+          "$IMAGE_NAME" \
+          "$TAG" \
+          "$DEPLOY_NAME"
       shell: bash
 
     # ECS Service Deployment
@@ -118,9 +137,12 @@ runs:
         
     - id: check-service-deployment
       if: ${{ inputs.deployment_type == 'service' && inputs.dry_run == 'false' }}
+      env:
+        ECS_CLUSTER: ${{ inputs.ecs_cluster }}
+        ECS_SERVICE: ${{ inputs.ecs_service }}
+        NEW_TASK_DEF_ARN: ${{ steps.ecs-deploy-service.outputs.task-definition-arn }}
       run: |
-         CURRENT_TASK_DEF_ARN=$(aws ecs describe-services --cluster ${{ inputs.ecs_cluster }} --services ${{ inputs.ecs_service }} --query services[0].deployments[0].taskDefinition | jq -r ".")
-         NEW_TASK_DEF_ARN=${{ steps.ecs-deploy-service.outputs.task-definition-arn }}
+         CURRENT_TASK_DEF_ARN=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --query 'services[0].deployments[0].taskDefinition' --output text)
          echo "Current task arn: $CURRENT_TASK_DEF_ARN"
          echo "New task arn: $NEW_TASK_DEF_ARN"
          if [ "$CURRENT_TASK_DEF_ARN" != "$NEW_TASK_DEF_ARN" ]; then
@@ -144,26 +166,36 @@ runs:
 
     - id: update-eventbridge-target
       if: ${{ inputs.deployment_type == 'scheduled_task' && inputs.dry_run == 'false' }}
+      env:
+        ECS_CLUSTER: ${{ inputs.ecs_cluster }}
+        TASK_NAME: ${{ inputs.task_name }}
+        NEW_TASK_DEF_ARN: ${{ steps.register-task-def.outputs.task_definition_arn }}
       run: |
+        set -euo pipefail
         # Construct EventBridge rule name using same pattern as Terraform
-        EVENT_RULE_NAME="${{ inputs.ecs_cluster }}-${{ inputs.task_name }}"
-        
+        EVENT_RULE_NAME="${ECS_CLUSTER}-${TASK_NAME}"
+
         echo "Using EventBridge rule: $EVENT_RULE_NAME"
-        
+
         # Get current target configuration
         CURRENT_TARGETS=$(aws events list-targets-by-rule \
           --rule "$EVENT_RULE_NAME" \
           --query 'Targets[0]')
-        
+
+        if [ -z "$CURRENT_TARGETS" ] || [ "$CURRENT_TARGETS" == "null" ]; then
+          echo "❌ No existing target found for EventBridge rule $EVENT_RULE_NAME" >&2
+          exit 1
+        fi
+
         # Update only the TaskDefinitionArn, keeping all other config
-        UPDATED_TARGETS=$(echo $CURRENT_TARGETS | jq \
-          --arg new_arn "${{ steps.register-task-def.outputs.task_definition_arn }}" \
+        UPDATED_TARGETS=$(echo "$CURRENT_TARGETS" | jq \
+          --arg new_arn "$NEW_TASK_DEF_ARN" \
           '.EcsParameters.TaskDefinitionArn = $new_arn')
-        
+
         # Put the updated target back
         aws events put-targets \
           --rule "$EVENT_RULE_NAME" \
           --targets "$UPDATED_TARGETS"
-        
-        echo "✅ Updated EventBridge rule $EVENT_RULE_NAME to task definition ${{ steps.register-task-def.outputs.task_definition_arn }}"
+
+        echo "✅ Updated EventBridge rule $EVENT_RULE_NAME to task definition $NEW_TASK_DEF_ARN"
       shell: bash
