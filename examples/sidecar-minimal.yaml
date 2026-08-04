@@ -1,0 +1,17 @@
+# Minimal Generic Sidecar
+# The smallest possible sidecar: a name and an image. Everything else defaults -
+# essential: true, no environment, no secrets, no mounts, no ports - and logs go
+# to the service log group under a stream prefix named after the sidecar.
+name: sidecar-minimal-app
+replica_count: 1
+cpu: 256
+memory: 512
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+port: 8080
+
+envs:
+  - NODE_ENV: production
+
+sidecars:
+  - name: metrics-proxy
+    image: public.ecr.aws/nginx/nginx:1.27

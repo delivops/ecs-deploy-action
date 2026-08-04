@@ -12,6 +12,7 @@ This GitHub Action automates the deployment of containerized applications to Ama
 - EventBridge scheduled task support
 - Configurable deployment parameters
 - Support for OpenTelemetry and Fluent Bit sidecars
+- **Generic sidecar containers** with per-container read-only root filesystems and strict isolation
 - Secrets management integration
 - Integration with GitHub Actions workflow
 - **EC2 and Fargate launch type support**
@@ -166,6 +167,7 @@ The action uses a simplified YAML configuration file for task definitions. See t
 - Health checks
 - Port mappings
 - OpenTelemetry and Fluent Bit integration
+- [Generic sidecars](./docs/sidecars.md) (extra containers with their own env, secrets, mounts and read-only setting)
 - [Task and execution roles](./docs/roles.md) (explicit ARNs or automatic discovery from SSM)
 - [EC2 launch type support](./docs/ec2-launch-type.md) (with bridge/host network modes)
 - [Linux parameters](./docs/linux-parameters.md) (init process, capabilities, shared memory, devices)

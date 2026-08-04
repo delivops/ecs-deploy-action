@@ -1,0 +1,117 @@
+{
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-app:latest",
+      "essential": true,
+      "environment": [],
+      "command": [],
+      "entryPoint": [],
+      "secrets": [],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/test-cluster/test-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "/default"
+        }
+      },
+      "portMappings": [
+        {
+          "name": "default",
+          "containerPort": 8080,
+          "hostPort": 8080,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "readonlyRootFilesystem": true,
+      "mountPoints": [
+        {
+          "sourceVolume": "writable-tmp",
+          "containerPath": "/tmp"
+        }
+      ]
+    },
+    {
+      "name": "cache",
+      "image": "public.ecr.aws/docker/library/redis:7-alpine",
+      "essential": true,
+      "environment": [],
+      "command": [],
+      "entryPoint": [],
+      "secrets": [],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/test-cluster/test-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "cache"
+        }
+      },
+      "readonlyRootFilesystem": true,
+      "mountPoints": [
+        {
+          "sourceVolume": "cache-writable-tmp",
+          "containerPath": "/tmp"
+        }
+      ]
+    },
+    {
+      "name": "shipper",
+      "image": "public.ecr.aws/my-org/log-shipper:v2",
+      "essential": true,
+      "environment": [],
+      "command": [],
+      "entryPoint": [],
+      "secrets": [
+        {
+          "name": "SHIPPER_TOKEN",
+          "valueFrom": "arn:aws:secretsmanager::secret:log-shipper-token-XyZ123:SHIPPER_TOKEN::"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/test-cluster/test-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "shipper"
+        }
+      },
+      "readonlyRootFilesystem": true,
+      "mountPoints": [
+        {
+          "sourceVolume": "shipper-writable-tmp",
+          "containerPath": "/tmp"
+        }
+      ]
+    }
+  ],
+  "cpu": "512",
+  "memory": "1024",
+  "family": "test-cluster_test-service",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "volumes": [
+    {
+      "name": "writable-tmp",
+      "host": {}
+    },
+    {
+      "name": "cache-writable-tmp",
+      "host": {}
+    },
+    {
+      "name": "shipper-writable-tmp",
+      "host": {}
+    }
+  ]
+}

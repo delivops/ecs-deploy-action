@@ -1,0 +1,262 @@
+{
+  "containerDefinitions": [
+    {
+      "name": "init-container-for-secret-files",
+      "image": "public.ecr.aws/aws-cli/aws-cli:latest",
+      "essential": false,
+      "entryPoint": [
+        "/bin/sh"
+      ],
+      "command": [
+        "-c",
+        "for secret in ${SECRET_FILES//,/ }; do   echo \"Fetching $secret...\";   echo \"Debug: AWS_REGION=$AWS_REGION, SECRET_PATH=/etc/secrets\";   SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretString --output text 2>/dev/null);   STRING_RESULT=$?;   if [ $STRING_RESULT -eq 0 ] && [ -n \"$SECRET_VALUE\" ] && [ \"$SECRET_VALUE\" != \"null\" ] && [ \"$SECRET_VALUE\" != \"none\" ] && [ \"$SECRET_VALUE\" != \"None\" ]; then     echo \"Found text secret, saving to /etc/secrets/$secret\";     echo \"$SECRET_VALUE\" > /etc/secrets/$secret;   else     echo \"Text retrieval failed or returned null, trying binary retrieval...\";     aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretBinary --output text | base64 -d > /etc/secrets/$secret 2>/dev/null;     BINARY_RESULT=$?;     if [ $BINARY_RESULT -eq 0 ] && [ -s /etc/secrets/$secret ]; then       echo \"Found binary secret, saved to /etc/secrets/$secret\";     else       echo \"\u274c Failed to retrieve $secret as either text or binary\" >&2;       echo \"Text result: $STRING_RESULT, Binary result: $BINARY_RESULT\" >&2;       exit 1;     fi;   fi;   echo \"\u2705 Successfully saved $secret to /etc/secrets/$secret (size: $(stat -c%s /etc/secrets/$secret 2>/dev/null || wc -c < /etc/secrets/$secret))\"; done"
+      ],
+      "environment": [
+        {
+          "name": "SECRET_FILES",
+          "value": "app-certificate"
+        },
+        {
+          "name": "AWS_REGION",
+          "value": "us-east-1"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "shared-volume",
+          "containerPath": "/etc/secrets"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/test-cluster/test-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ssm-file-downloader"
+        }
+      }
+    },
+    {
+      "name": "app",
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-app:latest",
+      "essential": true,
+      "environment": [
+        {
+          "name": "NODE_ENV",
+          "value": "production"
+        }
+      ],
+      "command": [],
+      "entryPoint": [],
+      "secrets": [],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/test-cluster/test-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "/default"
+        }
+      },
+      "portMappings": [
+        {
+          "name": "default",
+          "containerPort": 8080,
+          "hostPort": 8080,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "shared-volume",
+          "containerPath": "/etc/secrets"
+        }
+      ],
+      "dependsOn": [
+        {
+          "containerName": "init-container-for-secret-files",
+          "condition": "SUCCESS"
+        }
+      ]
+    },
+    {
+      "name": "metrics-secret-init",
+      "image": "public.ecr.aws/aws-cli/aws-cli:latest",
+      "essential": false,
+      "entryPoint": [
+        "/bin/sh"
+      ],
+      "command": [
+        "-c",
+        "for secret in ${SECRET_FILES//,/ }; do   echo \"Fetching $secret...\";   echo \"Debug: AWS_REGION=$AWS_REGION, SECRET_PATH=/etc/metrics-secrets\";   SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretString --output text 2>/dev/null);   STRING_RESULT=$?;   if [ $STRING_RESULT -eq 0 ] && [ -n \"$SECRET_VALUE\" ] && [ \"$SECRET_VALUE\" != \"null\" ] && [ \"$SECRET_VALUE\" != \"none\" ] && [ \"$SECRET_VALUE\" != \"None\" ]; then     echo \"Found text secret, saving to /etc/metrics-secrets/$secret\";     echo \"$SECRET_VALUE\" > /etc/metrics-secrets/$secret;   else     echo \"Text retrieval failed or returned null, trying binary retrieval...\";     aws secretsmanager get-secret-value --secret-id $secret --region $AWS_REGION --query SecretBinary --output text | base64 -d > /etc/metrics-secrets/$secret 2>/dev/null;     BINARY_RESULT=$?;     if [ $BINARY_RESULT -eq 0 ] && [ -s /etc/metrics-secrets/$secret ]; then       echo \"Found binary secret, saved to /etc/metrics-secrets/$secret\";     else       echo \"\u274c Failed to retrieve $secret as either text or binary\" >&2;       echo \"Text result: $STRING_RESULT, Binary result: $BINARY_RESULT\" >&2;       exit 1;     fi;   fi;   echo \"\u2705 Successfully saved $secret to /etc/metrics-secrets/$secret (size: $(stat -c%s /etc/metrics-secrets/$secret 2>/dev/null || wc -c < /etc/metrics-secrets/$secret))\"; done"
+      ],
+      "environment": [
+        {
+          "name": "SECRET_FILES",
+          "value": "metrics-client-cert"
+        },
+        {
+          "name": "AWS_REGION",
+          "value": "us-east-1"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "metrics-secrets",
+          "containerPath": "/etc/metrics-secrets"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/test-cluster/test-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "metrics-secret-init"
+        }
+      },
+      "readonlyRootFilesystem": true
+    },
+    {
+      "name": "metrics",
+      "image": "public.ecr.aws/my-org/metrics-agent:v1.4.2",
+      "essential": false,
+      "environment": [
+        {
+          "name": "NODE_ENV",
+          "value": "production"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "value": "info"
+        },
+        {
+          "name": "DATABASE_URL",
+          "value": "postgresql://default-host:5432/db"
+        },
+        {
+          "name": "AGENT_MODE",
+          "value": "push"
+        },
+        {
+          "name": "SCRAPE_INTERVAL",
+          "value": "15"
+        }
+      ],
+      "command": [
+        "exec /usr/bin/metrics-agent --listen :9090"
+      ],
+      "entryPoint": [
+        "/bin/sh",
+        "-c"
+      ],
+      "secrets": [
+        {
+          "name": "REMOTE_WRITE_USER",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:metrics-abc123:REMOTE_WRITE_USER::"
+        },
+        {
+          "name": "REMOTE_WRITE_PASSWORD",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:metrics-abc123:REMOTE_WRITE_PASSWORD::"
+        }
+      ],
+      "stopTimeout": 5,
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/test-cluster/test-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "metrics-agent"
+        }
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "wget -q -O- http://127.0.0.1:9090/-/healthy || exit 1"
+        ],
+        "interval": 15,
+        "timeout": 3,
+        "retries": 2,
+        "startPeriod": 20
+      },
+      "portMappings": [
+        {
+          "name": "metrics-9090-tcp",
+          "containerPort": 9090,
+          "hostPort": 9090,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        },
+        {
+          "name": "agent-admin",
+          "containerPort": 9091,
+          "hostPort": 9091,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "linuxParameters": {
+        "initProcessEnabled": true,
+        "capabilities": {
+          "drop": [
+            "ALL"
+          ]
+        }
+      },
+      "cpu": 128,
+      "memory": 256,
+      "memoryReservation": 128,
+      "readonlyRootFilesystem": true,
+      "mountPoints": [
+        {
+          "sourceVolume": "metrics-secrets",
+          "containerPath": "/etc/metrics-secrets"
+        },
+        {
+          "sourceVolume": "metrics-writable-tmp",
+          "containerPath": "/tmp"
+        },
+        {
+          "sourceVolume": "metrics-writable-var-run",
+          "containerPath": "/var/run"
+        }
+      ],
+      "dependsOn": [
+        {
+          "containerName": "metrics-secret-init",
+          "condition": "SUCCESS"
+        }
+      ]
+    }
+  ],
+  "cpu": "1024",
+  "memory": "2048",
+  "family": "test-cluster_test-service",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "volumes": [
+    {
+      "name": "shared-volume",
+      "host": {}
+    },
+    {
+      "name": "metrics-secrets",
+      "host": {}
+    },
+    {
+      "name": "metrics-writable-tmp",
+      "host": {}
+    },
+    {
+      "name": "metrics-writable-var-run",
+      "host": {}
+    }
+  ]
+}

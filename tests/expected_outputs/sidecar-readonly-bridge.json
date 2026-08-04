@@ -1,0 +1,97 @@
+{
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-app:latest",
+      "essential": true,
+      "environment": [
+        {
+          "name": "NODE_ENV",
+          "value": "production"
+        },
+        {
+          "name": "SECRET_PATH",
+          "value": "/etc/secrets"
+        }
+      ],
+      "command": [
+        "npm",
+        "start"
+      ],
+      "entryPoint": [],
+      "secrets": [
+        {
+          "name": "CLIENT_ID",
+          "valueFrom": "arn:aws:secretsmanager::secret:app-production-IhUQht:CLIENT_ID::"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/test-cluster/test-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "/default"
+        }
+      },
+      "portMappings": [
+        {
+          "name": "default",
+          "containerPort": 8080,
+          "hostPort": 8080,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "readonlyRootFilesystem": true,
+      "mountPoints": [
+        {
+          "sourceVolume": "writable-tmp",
+          "containerPath": "/tmp"
+        }
+      ]
+    },
+    {
+      "name": "ssm-bridge",
+      "image": "public.ecr.aws/amazonlinux/amazonlinux@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "essential": true,
+      "environment": [],
+      "command": [
+        "sleep",
+        "infinity"
+      ],
+      "entryPoint": [],
+      "secrets": [],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/test-cluster/test-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ssm-bridge"
+        }
+      },
+      "linuxParameters": {
+        "initProcessEnabled": true
+      },
+      "readonlyRootFilesystem": false
+    }
+  ],
+  "cpu": "256",
+  "memory": "512",
+  "family": "test-cluster_test-service",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "runtimePlatform": {
+    "cpuArchitecture": "ARM64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "volumes": [
+    {
+      "name": "writable-tmp",
+      "host": {}
+    }
+  ]
+}

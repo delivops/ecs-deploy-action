@@ -1,0 +1,34 @@
+# Two Sidecars Sharing a Directory Path
+#
+# Both sidecars want a writable /tmp, and so does the application. Because every
+# generated volume name is prefixed with its owner, they get three separate
+# volumes - writable-tmp, cache-writable-tmp and shipper-writable-tmp - rather
+# than accidentally sharing one scratch directory.
+name: two-writable-tmp-app
+replica_count: 1
+cpu: 512
+memory: 1024
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+
+readonly_root_filesystem: true
+writable_dirs:
+  - /tmp
+
+port: 8080
+
+sidecars:
+  - name: cache
+    image: public.ecr.aws/docker/library/redis:7-alpine
+    writable_dirs:
+      - /tmp
+
+  - name: shipper
+    image: public.ecr.aws/my-org/log-shipper:v2
+    # Inherits readonly_root_filesystem: true from the top level - only the
+    # explicit per-sidecar value overrides it.
+    writable_dirs:
+      - /tmp
+    # The legacy `secrets` format works for sidecars too, and stays a valueFrom
+    # reference. The application container declares none of these.
+    secrets:
+      - SHIPPER_TOKEN: arn:aws:secretsmanager::secret:log-shipper-token-XyZ123

@@ -116,6 +116,56 @@ def infer_field_types_and_examples():
         
         # Secret files
         'secret_files': ['ssl-certificate', 'private-key', 'config-file'],
+
+        # Launch type, networking and container flags. Every field below is
+        # discovered from generate_task_def.py but has no curated example, so it
+        # used to fall through to a placeholder string like
+        # 'example-launch-type' - which failed validation and made every run of
+        # this script emit "# Error generating task definition" instead of a
+        # task definition.
+        'launch_type': 'FARGATE',
+        'network_mode': 'awsvpc',
+        'app_protocol': 'http',
+        'stop_timeout': 30,
+        'ephemeral_storage': 21,
+        'readonly_root_filesystem': True,
+        'writable_dirs': ['/tmp', '/var/run'],
+        'secrets_files_path': '/etc/secrets',
+        'linux_parameters': {
+            'init_process_enabled': True,
+            'capabilities': {'drop': ['ALL']},
+        },
+
+        # Per-service overrides. Like sidecars below, this is discovered from
+        # generate_task_def.py and needs a real value - the inferred string made
+        # every run of this script emit "# Error generating task definition".
+        'services_overrides': {
+            'worker-service': {
+                'cpu': 512,
+                'memory': 1024,
+                'envs': [{'WORKER_MODE': 'true'}],
+            }
+        },
+
+        # Generic sidecars. Needs a real value here: without one the field is
+        # discovered from generate_task_def.py but falls through to the string
+        # 'example-sidecars', which then fails validation and blanks out the
+        # generated task definition below.
+        'sidecars': [
+            {
+                'name': 'metrics-agent',
+                'image': 'public.ecr.aws/my-org/metrics-agent:v1.4.2',
+                'essential': False,
+                # Not 9090: additional_ports above already claims that port for
+                # the app, and under awsvpc all containers share one interface.
+                'port': 9464,
+                'cpu': 128,
+                'memory': 256,
+                'envs': [{'AGENT_MODE': 'push'}],
+                'writable_dirs': ['/tmp'],
+                'readonly_root_filesystem': True,
+            }
+        ],
         
         # OpenTelemetry
         'otel_collector': {
@@ -158,6 +208,11 @@ def create_comprehensive_yaml():
         'name'  # Only used as fallback when service_name is not provided, but service_name is always provided by the action
     }
     
+    # role_arn is read through a variable key (normalize_role_value), so the AST
+    # scan above cannot see it. Without it the example config has no role at all
+    # and generation fails trying to reach SSM for one.
+    discovered_fields.setdefault('role_arn', None)
+
     print(f"🔍 Discovered {len(discovered_fields)} configuration fields from generate_task_def.py")
     
     # Create comprehensive example
