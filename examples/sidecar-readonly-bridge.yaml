@@ -1,0 +1,46 @@
+# Read-Only Application + Writable ECS Exec Bridge
+#
+# The motivating case for generic sidecars. The application container keeps
+# readonlyRootFilesystem: true (with /tmp backed by a writable volume), while a
+# tiny bridge container runs with a writable root filesystem so the ECS Exec
+# managed agent has somewhere to unpack itself.
+#
+# Note what the bridge does NOT get: none of the application's environment,
+# secrets, secret files, writable mounts or ports. A sidecar only ever receives
+# what its own block declares.
+name: readonly-with-bridge-app
+replica_count: 1
+cpu: 256
+memory: 512
+cpu_arch: ARM64
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+
+readonly_root_filesystem: true
+writable_dirs:
+  - /tmp
+
+port: 8080
+envs:
+  - NODE_ENV: production
+  - SECRET_PATH: /etc/secrets
+secrets:
+  - CLIENT_ID: arn:aws:secretsmanager::secret:app-production-IhUQht
+command: ["npm", "start"]
+
+sidecars:
+  - name: ssm-bridge
+    # Pin sidecar images by digest: nothing in the deploy pipeline rebuilds them.
+    image: public.ecr.aws/amazonlinux/amazonlinux@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    essential: true
+    command:
+      - sleep
+      - infinity
+    # Overrides the top-level `true` for this container only.
+    readonly_root_filesystem: false
+    linux_parameters:
+      init_process_enabled: true
+    envs: []
+    secrets: []
+    secrets_envs: []
+    secret_files: []
+    writable_dirs: []

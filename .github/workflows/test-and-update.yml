@@ -26,6 +26,9 @@ jobs:
     - name: Run role resolution tests
       run: python tests/test_roles.py
 
+    - name: Run sidecar tests
+      run: python tests/test_sidecars.py
+
     - name: Run task definition tests
       # Deliberately without UPDATE_EXPECTED, so a missing expected output fails
       # the build instead of being fabricated here and auto-committed - which
@@ -61,3 +64,4 @@ jobs:
         # Re-run to ensure everything still passes after any auto-committed update.
         python tests/test.py
         python tests/test_roles.py
+        python tests/test_sidecars.py

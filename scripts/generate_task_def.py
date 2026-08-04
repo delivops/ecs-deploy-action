@@ -148,6 +148,8 @@ def validate_config(config: Dict[str, Any]) -> None:
             continue
         validate_role_arn(value, f"YAML key '{key}'")
 
+    validate_sidecars(config)
+
 # Fields that are arrays and should be extended (appended) during merge
 ARRAY_FIELDS = {
     'command', 'entrypoint', 'envs', 'envs_from_files', 'secrets', 'secrets_envs',
@@ -159,6 +161,40 @@ OBJECT_FIELDS = {
     'health_check', 'linux_parameters', 'otel_collector', 'fluent_bit_collector'
 }
 
+def merge_sidecars(base_sidecars: Any, override_sidecars: Any) -> Any:
+    """Merge two `sidecars` lists by container name rather than appending.
+
+    Blindly extending (the rule for every other array field) would produce two
+    containers with the same name, which ECS rejects. Instead a service override
+    that names an existing sidecar patches it - recursively, so the array/object/
+    null rules of merge_configs apply inside the sidecar too - and a name not in
+    the base is appended. Base order is preserved.
+    """
+    if not isinstance(base_sidecars, list) or not isinstance(override_sidecars, list):
+        # Malformed input: let validate_sidecars report it with a good message.
+        return override_sidecars
+
+    merged = [dict(s) if isinstance(s, dict) else s for s in base_sidecars]
+    index = {
+        s['name']: i for i, s in enumerate(merged)
+        if isinstance(s, dict) and isinstance(s.get('name'), str)
+    }
+
+    for override in override_sidecars:
+        if not isinstance(override, dict):
+            merged.append(override)
+            continue
+        name = override.get('name')
+        position = index.get(name) if isinstance(name, str) else None
+        if position is None:
+            merged.append(dict(override))
+            if isinstance(name, str):
+                index[name] = len(merged) - 1
+            continue
+        merged[position] = merge_configs(merged[position], override)
+
+    return merged
+
 def merge_configs(base_config: Dict[str, Any], service_override: Dict[str, Any]) -> Dict[str, Any]:
     """
     Merge base configuration with service-specific overrides.
@@ -166,6 +202,7 @@ def merge_configs(base_config: Dict[str, Any], service_override: Dict[str, Any])
     - Scalars: Override replaces base
     - Arrays: Service values appended to base (extend)
     - Objects: Service object completely replaces base (shallow merge)
+    - sidecars: Merged by name (see merge_sidecars)
     """
     # Start with a copy of base config (excluding services_overrides)
     merged = {k: v for k, v in base_config.items() if k != 'services_overrides'}
@@ -176,7 +213,9 @@ def merge_configs(base_config: Dict[str, Any], service_override: Dict[str, Any])
             merged.pop(key, None)
             continue
 
-        if key in ARRAY_FIELDS:
+        if key == 'sidecars':
+            merged[key] = merge_sidecars(merged.get(key, []), override_value)
+        elif key in ARRAY_FIELDS:
             # Extend: append service array to base array
             base_array = merged.get(key, [])
             if isinstance(base_array, list) and isinstance(override_value, list):
@@ -239,6 +278,386 @@ def validate_services_overrides(config: Dict[str, Any]) -> None:
                 f"got {type(overrides).__name__}"
             )
 
+# ---------------------------------------------------------------------------
+# Generic sidecars
+# ---------------------------------------------------------------------------
+
+# ECS container and volume names share this shape: up to 255 letters, numbers,
+# hyphens and underscores. Enforced here so a bad sidecar name fails with a
+# clear message instead of an opaque RegisterTaskDefinition rejection.
+ECS_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_-]{0,254}$')
+
+# Port mapping names are stricter than container names: lowercase only, and
+# capped at 64 characters.
+ECS_PORT_NAME_PATTERN = re.compile(r'^[a-z][a-z0-9_-]{0,63}$')
+
+# Container names this generator produces itself. A sidecar may not take one.
+# 'default' is reserved too: build_log_configuration rewrites that stream prefix
+# to '/default' for backwards compatibility, so a sidecar named 'default' would
+# silently log into the application's stream.
+RESERVED_CONTAINER_NAMES = frozenset({
+    'app', 'init-container-for-secret-files', 'fluent-bit', 'otel-collector', 'default',
+})
+
+def _is_positive_int(value: Any) -> bool:
+    # bool is an int subclass in Python, so `port: true` must not pass as a port.
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+# Every key a sidecar block may set, mapped to its type rule. This table is the
+# single source of truth: the allowed-key set is derived from it below, so a new
+# key cannot be accepted without also being type-checked, or type-checked while
+# still being rejected as unsupported.
+SIDECAR_KEY_TYPES: Dict[str, tuple] = {
+    key: (lambda v: isinstance(v, list), "a list")
+    for key in ('command', 'entrypoint', 'envs', 'envs_from_files', 'secrets',
+                'secrets_envs', 'secret_files', 'writable_dirs', 'additional_ports')
+}
+SIDECAR_KEY_TYPES.update({
+    key: (lambda v: isinstance(v, dict), "a mapping")
+    for key in ('health_check', 'linux_parameters')
+})
+SIDECAR_KEY_TYPES.update({
+    key: (lambda v: isinstance(v, str), "a string")
+    for key in ('name', 'image', 'secrets_files_path', 'app_protocol',
+                'log_stream_prefix')
+})
+SIDECAR_KEY_TYPES.update({
+    key: (lambda v: isinstance(v, bool), "true or false")
+    for key in ('enabled', 'essential', 'readonly_root_filesystem')
+})
+SIDECAR_KEY_TYPES.update({
+    key: (_is_positive_int, "a positive integer")
+    for key in ('port', 'cpu', 'memory', 'memory_reservation', 'stop_timeout')
+})
+
+# Anything outside the table is a typo and is rejected - silently ignoring an
+# unknown key is how a sidecar ends up missing the secret or mount its author
+# thought they had configured.
+SIDECAR_ALLOWED_KEYS = frozenset(SIDECAR_KEY_TYPES)
+
+def volume_name_for_writable_dir(dir_path: str, prefix: str = "") -> str:
+    """Generate the volume name backing a writable directory.
+
+    `/var/run` becomes `writable-var-run`, or `<prefix>-writable-var-run` for a
+    sidecar. The prefix is what keeps two sidecars that both want /tmp on two
+    distinct volumes.
+    """
+    # Deliberately not str()-coerced: a non-string path raises here exactly as it
+    # did before this helper existed, rather than silently producing a volume
+    # named after an integer and a containerPath ECS will reject.
+    suffix = "writable-" + dir_path.strip("/").replace("/", "-")
+    return f"{prefix}-{suffix}" if prefix else suffix
+
+def sidecar_init_container_name(sidecar_name: str) -> str:
+    """Name of the secret-file init container generated for a sidecar."""
+    return f"{sidecar_name}-secret-init"
+
+def sidecar_secrets_volume_name(sidecar_name: str) -> str:
+    """Name of the volume carrying a sidecar's downloaded secret files."""
+    return f"{sidecar_name}-secrets"
+
+def sidecar_is_enabled(sidecar: Dict[str, Any]) -> bool:
+    """Whether a sidecar block should be rendered.
+
+    Only an explicit `enabled: false` switches one off. A missing key and a YAML
+    null both mean enabled - `enabled:` with nothing after it parses as None,
+    and silently dropping a container for that would be a nasty surprise.
+    """
+    return sidecar.get('enabled') is not False
+
+def enabled_sidecars(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The sidecar blocks that should actually be rendered, in declaration order."""
+    return [s for s in (config.get('sidecars') or []) if sidecar_is_enabled(s)]
+
+def _validate_sidecar_types(sidecar: Dict[str, Any], label: str) -> None:
+    """Type-check the supported keys of one sidecar block."""
+    for key, value in sidecar.items():
+        if value is None:
+            continue  # An explicit null means "unset"; treated as absent.
+        rule = SIDECAR_KEY_TYPES.get(key)
+        if rule is None:
+            continue  # Unknown keys are already rejected by the caller.
+        matches, expected = rule
+        if not matches(value):
+            # A wrong-typed value is usually best described by its type, but for
+            # a rejected number the value itself is what the author needs to see.
+            got = repr(value) if expected == "a positive integer" else type(value).__name__
+            raise ValidationError(f"{label}: '{key}' must be {expected}, got {got}")
+
+    memory = sidecar.get('memory')
+    reservation = sidecar.get('memory_reservation')
+    if memory is not None and reservation is not None and reservation > memory:
+        raise ValidationError(
+            f"{label}: memory_reservation ({reservation}) must not exceed "
+            f"memory ({memory}) - ECS rejects a soft limit above the hard limit."
+        )
+
+def validate_sidecars(config: Dict[str, Any]) -> None:
+    """Validate the `sidecars` block.
+
+    Pure and idempotent: called once early (before anything iterates sidecars,
+    so a malformed block fails with a real message rather than an AttributeError)
+    and again from validate_config, so callers that build a config dict by hand
+    are validated too.
+    """
+    sidecars = config.get('sidecars')
+    if sidecars is None:
+        return
+
+    if not isinstance(sidecars, list):
+        raise ValidationError(
+            f"sidecars must be a list of mappings, got {type(sidecars).__name__}"
+        )
+
+    # Names the finished task definition will contain, so a declared name that
+    # collides with a *generated* one is caught too.
+    container_names: Dict[str, str] = {}
+    for name in RESERVED_CONTAINER_NAMES:
+        container_names[name] = "reserved by the action"
+
+    volume_names: Dict[str, str] = {}
+    for index, sidecar in enumerate(sidecars):
+        label = f"sidecars[{index}]"
+        if not isinstance(sidecar, dict):
+            raise ValidationError(
+                f"{label} must be a mapping, got {type(sidecar).__name__}"
+            )
+
+        unknown = sorted(set(sidecar) - SIDECAR_ALLOWED_KEYS)
+        if unknown:
+            raise ValidationError(
+                f"{label}: unsupported key(s) {unknown}. Supported keys: "
+                f"{sorted(SIDECAR_ALLOWED_KEYS)}"
+            )
+
+        name = sidecar.get('name')
+        if not name or not isinstance(name, str):
+            raise ValidationError(f"{label}: 'name' is required and must be a string")
+        label = f"sidecars[{index}] ('{name}')"
+
+        if not ECS_NAME_PATTERN.match(name):
+            raise ValidationError(
+                f"{label}: invalid container name. Must start with a letter or digit "
+                f"and contain only letters, digits, '-' and '_' (max 255 characters)."
+            )
+
+        image = sidecar.get('image')
+        if not image or not isinstance(image, str):
+            raise ValidationError(f"{label}: 'image' is required and must be a string")
+
+        _validate_sidecar_types(sidecar, label)
+
+        for entry in sidecar.get('envs') or []:
+            if not isinstance(entry, dict):
+                raise ValidationError(
+                    f"{label}: envs entries must be single-key mappings of name to "
+                    f"value, got {entry!r}"
+                )
+
+        # `default` is what build_log_configuration rewrites to the application's
+        # '/default' stream, so allowing it here would reopen the collision the
+        # reserved container name closes.
+        if sidecar.get('log_stream_prefix') == 'default':
+            raise ValidationError(
+                f"{label}: log_stream_prefix 'default' is reserved for the "
+                f"application container's log stream."
+            )
+
+        # A disabled sidecar still has to be well-formed - it is a base-config
+        # entry a service switched off, and it will be switched back on one day -
+        # but it contributes no names to the task definition.
+        if not sidecar_is_enabled(sidecar):
+            continue
+
+        generated = [(name, f"declared by {label}")]
+        if sidecar.get('secret_files'):
+            generated.append((
+                sidecar_init_container_name(name),
+                f"init container generated for {label}",
+            ))
+        for candidate, origin in generated:
+            if not ECS_NAME_PATTERN.match(candidate):
+                raise ValidationError(
+                    f"{label}: generated container name '{candidate}' ({origin}) is "
+                    f"not a valid ECS container name - the sidecar name is too long."
+                )
+            clash = container_names.get(candidate)
+            if clash:
+                raise ValidationError(
+                    f"Duplicate container name '{candidate}': {origin} but it is "
+                    f"already {clash}."
+                )
+            container_names[candidate] = origin
+
+        candidates = []
+        if sidecar.get('secret_files'):
+            candidates.append((sidecar_secrets_volume_name(name), 'secret_files'))
+        for dir_path in sidecar.get('writable_dirs') or []:
+            if not isinstance(dir_path, str) or not dir_path.strip('/'):
+                raise ValidationError(
+                    f"{label}: writable_dirs entries must be non-empty absolute "
+                    f"paths, got {dir_path!r}"
+                )
+            candidates.append((volume_name_for_writable_dir(dir_path, name), dir_path))
+
+        for volume, origin in candidates:
+            if not ECS_NAME_PATTERN.match(volume):
+                raise ValidationError(
+                    f"{label}: generated volume name '{volume}' (from {origin}) is not "
+                    f"a valid ECS volume name. Use only letters, digits, '-' and '_' "
+                    f"in the sidecar name and directory path."
+                )
+            clash = volume_names.get(volume)
+            if clash:
+                raise ValidationError(
+                    f"{label}: generated volume name '{volume}' (from {origin}) "
+                    f"collides with the volume generated from {clash}."
+                )
+            volume_names[volume] = f"{label} {origin}"
+
+    # Sidecar volumes must not collide with the application's own volumes.
+    app_volumes = {'shared-volume'} if config.get('secret_files') else set()
+    app_volumes.update(
+        volume_name_for_writable_dir(d) for d in (config.get('writable_dirs') or [])
+        if isinstance(d, str)
+    )
+    for volume in sorted(volume_names.keys() & app_volumes):
+        raise ValidationError(
+            f"Generated volume name '{volume}' from {volume_names[volume]} collides "
+            f"with an application-level volume of the same name."
+        )
+
+    # Port mapping names are unique per task definition, not per container.
+    _validate_port_mapping_names(config, sidecars)
+
+    _validate_sidecar_resource_budget(config, sidecars)
+
+def _validate_sidecar_resource_budget(config: Dict[str, Any],
+                                      sidecars: List[Dict[str, Any]]) -> None:
+    """Keep container-level reservations inside the task's Fargate budget.
+
+    On Fargate, ECS rejects a task whose containers reserve more CPU or memory
+    than the task itself. Catching it here turns a mid-deploy
+    RegisterTaskDefinition failure into a config error. EC2 task-level values are
+    advisory, so the check does not apply there.
+    """
+    if config.get('launch_type', 'FARGATE').upper() != 'FARGATE':
+        return
+
+    enabled = [s for s in sidecars if isinstance(s, dict) and sidecar_is_enabled(s)]
+
+    for yaml_key, task_default, unit in (('cpu', 256, 'CPU units'),
+                                         ('memory', 512, 'MiB')):
+        task_total = config.get(yaml_key, task_default)
+        if not isinstance(task_total, int):
+            continue  # validate_config reports a bad task-level value.
+
+        claimed = [(s['name'], s[yaml_key]) for s in enabled
+                   if isinstance(s.get(yaml_key), int)]
+        reserved = sum(value for _, value in claimed)
+        if not claimed or reserved < task_total:
+            continue
+
+        breakdown = ', '.join(f"{name}={value}" for name, value in claimed)
+        raise ValidationError(
+            f"Sidecars reserve {reserved} {unit} ({breakdown}) but the task only "
+            f"has {task_total}. Container-level {yaml_key} must leave room for the "
+            f"application container - raise the task-level '{yaml_key}' or lower "
+            f"the sidecar reservations."
+        )
+
+def _sidecar_main_port_name(sidecar_name: str, port: int) -> str:
+    """Port-mapping name for a sidecar's primary port.
+
+    Mirrors the `otel-collector-4317-tcp` convention already used for the OTEL
+    container. It cannot be "default" - that name is taken by the application's
+    port and ECS requires port-mapping names to be unique across the whole task.
+    """
+    return f"{sidecar_name}-{port}-tcp"
+
+def _validate_port_mapping_names(config: Dict[str, Any], sidecars: List[Dict[str, Any]]) -> None:
+    """Reject port mapping names and container ports a sidecar would duplicate.
+
+    Both namespaces are scoped to the whole task definition rather than to one
+    container, so a sidecar can collide with the application, with the OTEL
+    collector, or with another sidecar. Only collisions *involving a sidecar*
+    are reported: a config whose own additional_ports already repeat a name
+    predates this feature and is not this change's business to start failing.
+    """
+    seen: Dict[str, str] = {}
+    # Under awsvpc and host every container shares one network namespace, so two
+    # containers cannot listen on the same port. Under bridge, hostPort 0 lets
+    # Docker assign a free one, so duplicates are fine.
+    exclusive_ports = config.get('network_mode', 'awsvpc').lower() in ('awsvpc', 'host')
+    ports_seen: Dict[int, str] = {}
+
+    def record(port_name: Any, port: Any, origin: str) -> None:
+        seen.setdefault(str(port_name), origin)
+        if isinstance(port, int):
+            ports_seen.setdefault(port, origin)
+
+    def claim(port_name: Any, port: Any, origin: str) -> None:
+        key = str(port_name)
+        clash = seen.get(key)
+        if clash:
+            raise ValidationError(
+                f"Duplicate port mapping name '{key}': used by {origin} and by "
+                f"{clash}. ECS requires port mapping names to be unique across the "
+                f"whole task definition."
+            )
+        if not ECS_PORT_NAME_PATTERN.match(key):
+            raise ValidationError(
+                f"Invalid port mapping name '{key}' from {origin}. ECS port mapping "
+                f"names must start with a lowercase letter and contain only "
+                f"lowercase letters, digits, '-' and '_' (max 64 characters)."
+            )
+        seen[key] = origin
+
+        if not isinstance(port, int) or not exclusive_ports:
+            return
+        port_clash = ports_seen.get(port)
+        if port_clash:
+            raise ValidationError(
+                f"Duplicate container port {port}: used by {origin} and by "
+                f"{port_clash}. With network_mode "
+                f"'{config.get('network_mode', 'awsvpc')}' every container shares one "
+                f"network interface, so two containers cannot listen on the same port."
+            )
+        ports_seen[port] = origin
+
+    if config.get('port'):
+        record('default', config.get('port'), "the application's 'port'")
+    for entry in config.get('additional_ports') or []:
+        if isinstance(entry, dict):
+            for port_name, port in entry.items():
+                record(port_name, port, "the application's 'additional_ports'")
+
+    # The OTEL collector hardcodes these two mappings when it is enabled.
+    if config.get('otel_collector') is not None:
+        record('otel-collector-4317-tcp', 4317, "the otel-collector")
+        record('otel-collector-4318-tcp', 4318, "the otel-collector")
+
+    for sidecar in sidecars:
+        if not isinstance(sidecar, dict) or not sidecar_is_enabled(sidecar):
+            continue
+        name = sidecar.get('name')
+        port = sidecar.get('port')
+        if port:
+            claim(_sidecar_main_port_name(name, port), port, f"sidecar '{name}' 'port'")
+        for entry in sidecar.get('additional_ports') or []:
+            if not isinstance(entry, dict):
+                raise ValidationError(
+                    f"sidecar '{name}': additional_ports entries must be mappings of "
+                    f"name to port, got {entry!r}"
+                )
+            for port_name, entry_port in entry.items():
+                if not _is_positive_int(entry_port):
+                    raise ValidationError(
+                        f"sidecar '{name}': additional_ports port for '{port_name}' "
+                        f"must be a positive integer, got {entry_port!r}"
+                    )
+                claim(port_name, entry_port, f"sidecar '{name}' 'additional_ports'")
+
 DOTENV_KEY_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
 def parse_dotenv_file(path: Path) -> Dict[str, str]:
@@ -270,10 +689,14 @@ def parse_dotenv_file(path: Path) -> Dict[str, str]:
             result[key] = value
     return result
 
-def expand_envs_from_files(config: Dict[str, Any], yaml_path: Path) -> None:
+def expand_envs_from_files(config: Dict[str, Any], yaml_path: Path,
+                           label: str = "the task config") -> None:
     """Resolve envs_from_files paths relative to the YAML, then merge entries
     into config['envs']. File-derived values are overridden by inline envs;
-    later files in the list override earlier ones. Mutates config in place."""
+    later files in the list override earlier ones. Mutates config in place.
+
+    Also used per sidecar, hence `label` - it only distinguishes the log line.
+    """
     file_refs = config.pop('envs_from_files', None)
     if not file_refs:
         return
@@ -306,7 +729,8 @@ def expand_envs_from_files(config: Dict[str, Any], yaml_path: Path) -> None:
 
     config['envs'] = [{k: v} for k, v in merged.items()]
     logger.info(
-        f"Loaded {file_key_count} env var(s) from {file_count} file(s) referenced by envs_from_files"
+        f"Loaded {file_key_count} env var(s) from {file_count} file(s) referenced by "
+        f"envs_from_files in {label}"
     )
 
 def load_and_validate_config(yaml_file_path: str, service_name: Optional[str] = None) -> Dict[str, Any]:
@@ -328,10 +752,20 @@ def load_and_validate_config(yaml_file_path: str, service_name: Optional[str] = 
         # Apply service-specific overrides if present
         config = apply_service_overrides(raw_config, service_name)
 
+        # Shape-check sidecars before anything iterates them, so `sidecars: oops`
+        # fails with a real message instead of an AttributeError below.
+        validate_sidecars(config)
+
         # Expand envs_from_files into the envs list (after merge so per-service
         # entries are appended; before validation so the final envs list is what
-        # validate_config sees).
+        # validate_config sees). Sidecars resolve their files against the same
+        # YAML directory, but only into their own envs.
         expand_envs_from_files(config, yaml_path)
+        # Only the sidecars that will actually be rendered: a switched-off base
+        # sidecar must not fail every deploy because its dotenv file was deleted
+        # along with it.
+        for sidecar in enabled_sidecars(config):
+            expand_envs_from_files(sidecar, yaml_path, label=f"sidecar '{sidecar.get('name')}'")
 
         # Validate the final merged config
         validate_config(config)
@@ -368,16 +802,20 @@ class ContainerBuilder:
             }
         }
     
-    def build_port_mappings(self, main_port: Optional[int], 
+    def build_port_mappings(self, main_port: Optional[int],
                            additional_ports: List[Dict[str, int]], app_protocol: str = "http",
-                           network_mode: str = "awsvpc") -> List[Dict[str, Any]]:
+                           network_mode: str = "awsvpc",
+                           main_port_name: str = "default") -> List[Dict[str, Any]]:
         """Build port mappings configuration
-        
+
         Args:
             main_port: Primary container port
             additional_ports: List of additional port mappings
             app_protocol: Application protocol (http, grpc, tcp)
             network_mode: Network mode (awsvpc, bridge, host, none)
+            main_port_name: Name of the primary port mapping. Port mapping names
+                must be unique across the whole task definition, so a sidecar
+                cannot reuse the application's "default".
         """
         port_mappings = []
         
@@ -387,7 +825,7 @@ class ContainerBuilder:
         
         if main_port:
             port_mapping = {
-                "name": "default",
+                "name": main_port_name,
                 "containerPort": main_port,
                 "hostPort": 0 if use_dynamic_host_port else main_port,
                 "protocol": "tcp"
@@ -725,7 +1163,7 @@ class SecretManager:
         secrets = []
         
         # Legacy format support
-        secret_list = config.get('secrets', [])
+        secret_list = config.get('secrets') or []
         if secret_list:
             for secret_dict in secret_list:
                 for key, base_arn in secret_dict.items():
@@ -737,7 +1175,7 @@ class SecretManager:
             return secrets
         
         # New format
-        secrets_envs = config.get('secrets_envs', [])
+        secrets_envs = config.get('secrets_envs') or []
         
         for secret_config in secrets_envs:
             secret_id = secret_config.get('id', '')
@@ -811,8 +1249,52 @@ def build_image_uri(container_registry: Optional[str], image_name: str, tag: str
     logger.info(f"Container image URI: {image_uri}")
     return image_uri
 
-def build_init_containers(config, secret_files, cluster_name, app_name, aws_region, secrets_files_path="/etc/secrets"):
-    """Build init containers for secret file downloads"""
+def build_environment(container_config: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Build the `environment` list from a container's `envs` block.
+
+    Shared by the application container and every generic sidecar. Values are
+    stringified because ECS only accepts strings, so `ENABLE_METRICS: true`
+    becomes "True" - long-standing behaviour that existing goldens assert.
+    """
+    environment = []
+    for env_var in container_config.get('envs') or []:
+        for key, value in env_var.items():
+            environment.append({
+                "name": key,
+                "value": str(value)
+            })
+    return environment
+
+def build_health_check(container_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Build a container `healthCheck` from a `health_check` block, or None.
+
+    Shared by the application container and every generic sidecar. A block with
+    no (or an empty) command yields no healthCheck at all rather than a broken
+    one.
+    """
+    health_check = container_config.get('health_check', {})
+    if not health_check or not health_check.get('command'):
+        return None
+
+    return {
+        "command": ["CMD-SHELL", health_check["command"]],
+        "interval": health_check.get('interval', 30),
+        "timeout": health_check.get('timeout', 5),
+        "retries": health_check.get('retries', 3),
+        "startPeriod": health_check.get('start_period', 10)
+    }
+
+def build_init_containers(config, secret_files, cluster_name, app_name, aws_region,
+                          secrets_files_path="/etc/secrets", *,
+                          container_name="init-container-for-secret-files",
+                          source_volume="shared-volume",
+                          log_stream_prefix="ssm-file-downloader"):
+    """Build init containers for secret file downloads
+
+    The keyword-only arguments default to the application's long-standing names.
+    Sidecars pass their own prefixed names so two containers that both want
+    secret files do not fight over one container name and one volume.
+    """
     container_definitions = []
     
     # Handle secret files (existing functionality)
@@ -823,7 +1305,7 @@ def build_init_containers(config, secret_files, cluster_name, app_name, aws_regi
         container_builder = ContainerBuilder(cluster_name, app_name, aws_region)
         
         init_container = {
-            "name": "init-container-for-secret-files",
+            "name": container_name,
             "image": "public.ecr.aws/aws-cli/aws-cli:latest",
             "essential": False,
             "entryPoint": ["/bin/sh"],
@@ -864,14 +1346,14 @@ def build_init_containers(config, secret_files, cluster_name, app_name, aws_regi
             ],
             "mountPoints": [
                 {
-                    "sourceVolume": "shared-volume",
+                    "sourceVolume": source_volume,
                     "containerPath": secrets_files_path
                 }
             ],
-            "logConfiguration": container_builder.build_log_configuration(stream_prefix="ssm-file-downloader")
+            "logConfiguration": container_builder.build_log_configuration(stream_prefix=log_stream_prefix)
         }
         container_definitions.append(init_container)
-        logger.info(f"Built init container for {len(secret_files)} secret files")
+        logger.info(f"Built init container '{container_name}' for {len(secret_files)} secret files")
     
     return container_definitions
 
@@ -1013,6 +1495,64 @@ def build_linux_parameters(config: Dict[str, Any], launch_type: str = "FARGATE")
     
     return linux_parameters if linux_parameters else None
 
+def build_container_base(spec, container_builder, *, name, image, essential,
+                         log_configuration, environment, secrets, health,
+                         network_mode="awsvpc", launch_type="FARGATE",
+                         main_port_name="default"):
+    """Build the parts of a container definition that every container shares.
+
+    `spec` is the config block that owns the container: the whole task config
+    for the application container, or a single `sidecars` entry. Everything read
+    from it - command, entrypoint, stop_timeout, ports, health check, linux
+    parameters - therefore comes from that container's own configuration, which
+    is what keeps sidecars isolated from the application.
+
+    Callers add whatever is specific to them (mount points, dependencies,
+    resource reservations, readonlyRootFilesystem) to the returned dict.
+    """
+    # `or []` rather than a .get() default throughout: a key written with no
+    # value (`command:`) parses as None, and validation treats that as "unset".
+    # Emitting `"command": null` would be rejected by RegisterTaskDefinition
+    # after every offline check had already passed.
+    container = {
+        "name": name,
+        "image": image,
+        "essential": essential,
+        "environment": environment,
+        "command": spec.get('command') or [],
+        "entryPoint": spec.get('entrypoint') or [],
+        "secrets": secrets,
+    }
+
+    # Add stopTimeout if specified
+    stop_timeout = spec.get('stop_timeout')
+    if stop_timeout is not None:
+        container["stopTimeout"] = int(stop_timeout)
+
+    container["logConfiguration"] = log_configuration
+
+    # Only include healthCheck if it was properly built
+    if health:
+        container["healthCheck"] = health
+
+    # Handle port configurations
+    port_mappings = container_builder.build_port_mappings(
+        spec.get('port'),
+        spec.get('additional_ports') or [],
+        spec.get('app_protocol') or 'http',
+        network_mode,
+        main_port_name,
+    )
+    if port_mappings:
+        container["portMappings"] = port_mappings
+
+    # Add linuxParameters if configured
+    linux_parameters = build_linux_parameters(spec, launch_type)
+    if linux_parameters:
+        container["linuxParameters"] = linux_parameters
+
+    return container
+
 def build_app_container(config, image_uri, environment, secrets, health, cluster_name, app_name, aws_region, use_fluent_bit, has_secret_files, secrets_files_path="/etc/secrets", network_mode="awsvpc", launch_type="FARGATE"):
     """
     Build the main application container definition for the ECS task.
@@ -1051,53 +1591,30 @@ def build_app_container(config, image_uri, environment, secrets, health, cluster
         A dictionary describing the main application container suitable for
         inclusion in an ECS task definition.
     """
-    command = config.get('command', [])
-    entrypoint = config.get('entrypoint', [])
-    stop_timeout = config.get('stop_timeout')
-    
     container_builder = ContainerBuilder(cluster_name, app_name, aws_region)
-    
-    app_container = {
-        "name": "app",
-        "image": image_uri,
-        "essential": True,
-        "environment": environment,
-        "command": command,
-        "entryPoint": entrypoint,
-        "secrets": secrets
-    }
-    
-    # Add stopTimeout if specified
-    if stop_timeout is not None:
-        app_container["stopTimeout"] = int(stop_timeout)
-    
+
     # Set logConfiguration for app container
     if use_fluent_bit:
-        app_container["logConfiguration"] = {
+        log_configuration = {
             "logDriver": "awsfirelens",
             "options": {}
         }
     else:
-        app_container["logConfiguration"] = container_builder.build_log_configuration(stream_prefix="default")
-    
-    # Only include healthCheck if it was properly built
-    if health:
-        app_container["healthCheck"] = health
+        log_configuration = container_builder.build_log_configuration(stream_prefix="default")
 
-    # Handle port configurations
-    main_port = config.get('port')
-    additional_ports = config.get('additional_ports', [])
-    app_protocol = config.get('app_protocol', 'http')
-    
-    port_mappings = container_builder.build_port_mappings(main_port, additional_ports, app_protocol, network_mode)
-    if port_mappings:
-        app_container["portMappings"] = port_mappings
-    
-    # Add linuxParameters if configured
-    linux_parameters = build_linux_parameters(config, launch_type)
-    if linux_parameters:
-        app_container["linuxParameters"] = linux_parameters
-    
+    app_container = build_container_base(
+        config, container_builder,
+        name="app",
+        image=image_uri,
+        essential=True,
+        log_configuration=log_configuration,
+        environment=environment,
+        secrets=secrets,
+        health=health,
+        network_mode=network_mode,
+        launch_type=launch_type,
+    )
+
     # Add mount points if using shared volume
     if has_secret_files:
         app_container["mountPoints"] = [
@@ -1263,6 +1780,124 @@ def build_otel_container(config, otel_collector_image, otel_is_custom_image, ote
     
     return otel_container
 
+def build_sidecar_container(sidecar, config, cluster_name, app_name, aws_region,
+                            network_mode="awsvpc", launch_type="FARGATE"):
+    """Build one generic sidecar, plus the init container and volumes it needs.
+
+    Isolation is the whole point: nothing from the application container leaks
+    in. A sidecar's environment, secrets, secret files, mounts, ports, health
+    check and linux parameters come exclusively from its own block. The single
+    inherited value is readonly_root_filesystem, and only as a fallback when the
+    sidecar does not state one of its own.
+
+    Args:
+        sidecar: One entry of the `sidecars` list, already validated.
+        config: The full task config, read only for the readonly_root_filesystem
+            fallback.
+
+    Returns:
+        (container_definitions, volumes). When the sidecar declares secret_files
+        its init container precedes it, so `dependsOn` is satisfiable.
+    """
+    name = sidecar['name']
+
+    if sidecar.get('envs_from_files'):
+        # Normally expanded in load_and_validate_config. Reaching here means the
+        # caller built a config dict by hand and skipped that step; silently
+        # dropping the file would ship a sidecar missing its environment.
+        raise ValidationError(
+            f"sidecar '{name}': envs_from_files was not expanded. It is only "
+            f"supported when the config is loaded from a YAML file."
+        )
+
+    builder = ContainerBuilder(cluster_name, app_name, aws_region)
+    containers = []
+    volumes = []
+
+    main_port = sidecar.get('port')
+    container = build_container_base(
+        sidecar, builder,
+        name=name,
+        image=sidecar['image'],
+        # Only an explicit `essential: false` makes a sidecar non-essential. A
+        # blank `essential:` parses as None, and bool(None) would silently mean
+        # "let this container die without failing the task".
+        essential=sidecar.get('essential') is not False,
+        # Sidecars always log straight to CloudWatch under the service log
+        # group, exactly like the fluent-bit and otel-collector containers -
+        # they do not follow the application onto awsfirelens.
+        log_configuration=builder.build_log_configuration(
+            stream_prefix=sidecar.get('log_stream_prefix', name)
+        ),
+        environment=build_environment(sidecar),
+        secrets=SecretManager.build_secrets_from_config(sidecar),
+        health=build_health_check(sidecar),
+        network_mode=network_mode,
+        launch_type=launch_type,
+        main_port_name=_sidecar_main_port_name(name, main_port) if main_port else name,
+    )
+
+    # Container-level reservations. Task-level cpu/memory are strings; the
+    # container-level equivalents must be integers.
+    for yaml_key, td_key in (('cpu', 'cpu'), ('memory', 'memory'),
+                             ('memory_reservation', 'memoryReservation')):
+        value = sidecar.get(yaml_key)
+        if value is not None:
+            container[td_key] = int(value)
+
+    # Per-container precedence: the sidecar's own value wins, otherwise the
+    # application-level default, otherwise the key is omitted entirely.
+    readonly = sidecar.get('readonly_root_filesystem')
+    if readonly is None:
+        readonly = config.get('readonly_root_filesystem')
+    if readonly is not None:
+        container["readonlyRootFilesystem"] = bool(readonly)
+
+    mount_points = []
+    depends_on = []
+
+    secret_files = sidecar.get('secret_files') or []
+    if secret_files:
+        secrets_files_path = sidecar.get('secrets_files_path', '/etc/secrets')
+        init_name = sidecar_init_container_name(name)
+        volume_name = sidecar_secrets_volume_name(name)
+
+        init_containers = build_init_containers(
+            sidecar, secret_files, cluster_name, app_name, aws_region,
+            secrets_files_path,
+            container_name=init_name,
+            source_volume=volume_name,
+            log_stream_prefix=init_name,
+        )
+        for init_container in init_containers:
+            if readonly is not None:
+                init_container["readonlyRootFilesystem"] = bool(readonly)
+        containers.extend(init_containers)
+        volumes.append({"name": volume_name, "host": {}})
+
+        mount_points.append({
+            "sourceVolume": volume_name,
+            "containerPath": secrets_files_path
+        })
+        depends_on.append({"containerName": init_name, "condition": "SUCCESS"})
+
+    for dir_path in sidecar.get('writable_dirs') or []:
+        volume_name = volume_name_for_writable_dir(dir_path, name)
+        volumes.append({"name": volume_name, "host": {}})
+        mount_points.append({
+            "sourceVolume": volume_name,
+            "containerPath": dir_path
+        })
+
+    if mount_points:
+        container["mountPoints"] = mount_points
+    if depends_on:
+        container["dependsOn"] = depends_on
+
+    containers.append(container)
+    logger.info(f"Built sidecar container '{name}'")
+    return containers, volumes
+
 def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name=None, aws_region=None, registry=None, container_registry=None, image_name=None, tag=None, service_name=None, public_image=None):
     """
     Generate an ECS task definition from a simplified YAML configuration
@@ -1288,7 +1923,12 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
         config = load_and_validate_config(yaml_file_path, service_name)
     else:
         config = config_dict
-    
+
+    # Cheap and idempotent, and the config_dict path above never went through
+    # load_and_validate_config - without this a hand-built config could emit a
+    # task definition with duplicate container or volume names.
+    validate_sidecars(config)
+
     # Extract values from config
     # Use service name from action instead of YAML name
     app_name = service_name if service_name else config.get('name', 'app')
@@ -1317,19 +1957,8 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
     cpu_arch = config.get('cpu_arch', 'X86_64')
     command = config.get('command', [])
     entrypoint = config.get('entrypoint', [])
-    health_check = config.get('health_check', {})
-    # Only build health check if config has values and command is non-empty
-    if health_check and health_check.get('command'):
-        health = {
-            "command": ["CMD-SHELL", health_check["command"]],
-            "interval": health_check.get('interval', 30),
-            "timeout": health_check.get('timeout', 5),
-            "retries": health_check.get('retries', 3),
-            "startPeriod": health_check.get('start_period', 10)
-        }
-    else:
-        health = None
-    
+    health = build_health_check(config)
+
     # Extract replica_count for later use in the GitHub Action
     replica_count = config.get('replica_count', '')
 
@@ -1348,14 +1977,8 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
         fluent_bit_image = ''
     
     # Get environment variables (changed from env_variables to envs)
-    environment = []
-    for env_var in config.get('envs', []):
-        for key, value in env_var.items():
-            environment.append({
-                "name": key,
-                "value": str(value)  # Convert to string for ECS compatibility
-            })
-    
+    environment = build_environment(config)
+
     # Get secrets using the SecretManager
     secrets = SecretManager.build_secrets_from_config(config)
     
@@ -1378,7 +2001,7 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
     writable_dirs = config.get('writable_dirs', [])
     for dir_path in writable_dirs:
         # Generate volume name from path: /tmp -> writable-tmp, /var/run -> writable-var-run
-        vol_name = "writable-" + dir_path.strip("/").replace("/", "-")
+        vol_name = volume_name_for_writable_dir(dir_path)
         volumes.append({
             "name": vol_name,
             "host": {}
@@ -1417,24 +2040,40 @@ def generate_task_definition(config_dict=None, yaml_file_path=None, cluster_name
         otel_container = build_otel_container(config, otel_collector_image, otel_is_custom_image, otel_collector_ssm, otel_extra_config, otel_metrics_port, otel_metrics_path, app_name, cluster_name, aws_region)
         container_definitions.append(otel_container)
     
-    # Apply readonlyRootFilesystem to ALL containers if specified
+    # The two passes below apply the application-level defaults to the
+    # application container and its built-in companions (init, fluent-bit,
+    # otel). Generic sidecars are deliberately appended AFTERWARDS: they are
+    # isolated by contract and manage their own readonly flag and mounts.
+    #
+    # Apply readonlyRootFilesystem to the application containers if specified
     readonly_root_filesystem = config.get('readonly_root_filesystem')
     if readonly_root_filesystem is not None:
         for container in container_definitions:
             container["readonlyRootFilesystem"] = bool(readonly_root_filesystem)
-    
-    # Add writable_dirs mountPoints to ALL containers if specified
+
+    # Add writable_dirs mountPoints to the application containers if specified
     if writable_dirs:
         for container in container_definitions:
             if "mountPoints" not in container:
                 container["mountPoints"] = []
             for dir_path in writable_dirs:
-                vol_name = "writable-" + dir_path.strip("/").replace("/", "-")
+                vol_name = volume_name_for_writable_dir(dir_path)
                 container["mountPoints"].append({
                     "sourceVolume": vol_name,
                     "containerPath": dir_path
                 })
-    
+
+    # Generic sidecars, in declaration order. Must stay below the two blanket
+    # passes above - that is what keeps a sidecar from inheriting application
+    # mounts and the application readonly flag it explicitly overrode.
+    for sidecar in enabled_sidecars(config):
+        sidecar_containers, sidecar_volumes = build_sidecar_container(
+            sidecar, config, cluster_name, app_name, aws_region,
+            network_mode, launch_type
+        )
+        container_definitions.extend(sidecar_containers)
+        volumes.extend(sidecar_volumes)
+
     # Resolve the two IAM role slots: YAML first, then the SSM parameters
     # published by terraform-aws-ecs-service. Unresolved slots are a hard error.
     # Done here, after the containers are built, so pure-config errors still

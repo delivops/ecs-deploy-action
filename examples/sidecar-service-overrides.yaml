@@ -1,0 +1,47 @@
+# Per-Service Sidecar Overrides
+#
+# Sidecars merge by name rather than being appended, so a service can patch a
+# base sidecar, switch one off entirely, or add one of its own.
+#
+# For `test-service` (the name the test runner deploys as) the result is:
+#   - ssm-bridge  : disabled, absent from the task definition
+#   - cache       : patched - bigger reservation, one extra env var appended
+#   - audit-tailer: added, exists only for this service
+cpu: 512
+memory: 1024
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+port: 8080
+
+envs:
+  - LOG_LEVEL: info
+
+sidecars:
+  - name: ssm-bridge
+    image: public.ecr.aws/amazonlinux/amazonlinux:2023
+    command: ["sleep", "infinity"]
+    readonly_root_filesystem: false
+
+  - name: cache
+    image: public.ecr.aws/docker/library/redis:7-alpine
+    memory_reservation: 64
+    envs:
+      - REDIS_MAXMEMORY: 32mb
+
+services_overrides:
+  test-service:
+    sidecars:
+      # Matched by name: switched off for this service only.
+      - name: ssm-bridge
+        enabled: false
+
+      # Matched by name: scalars replace, arrays extend - so the base
+      # REDIS_MAXMEMORY entry is kept and REDIS_APPENDONLY is appended.
+      - name: cache
+        memory_reservation: 128
+        envs:
+          - REDIS_APPENDONLY: "no"
+
+      # Not in the base list: appended.
+      - name: audit-tailer
+        image: public.ecr.aws/my-org/audit-tailer:v1
+        essential: false

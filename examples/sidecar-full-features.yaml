@@ -1,0 +1,77 @@
+# Sidecar Using Every Supported Feature
+#
+# One sidecar exercising the whole schema: env values (inline and from a dotenv
+# file), ECS secret references, secret files (which generate their own init
+# container and volume), writable directories, a health check, linux parameters,
+# ports, container-level reservations and a custom log stream prefix.
+#
+# The application container is configured with a different set of everything, to
+# make the isolation obvious: nothing crosses between the two.
+name: sidecar-full-features-app
+replica_count: 1
+cpu: 1024
+memory: 2048
+role_arn: arn:aws:iam::123456789012:role/ecsTaskExecutionRole
+
+port: 8080
+envs:
+  - NODE_ENV: production
+secret_files:
+  - app-certificate
+
+sidecars:
+  - name: metrics
+    image: public.ecr.aws/my-org/metrics-agent:v1.4.2
+    essential: false
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["exec /usr/bin/metrics-agent --listen :9090"]
+    stop_timeout: 5
+
+    envs:
+      - AGENT_MODE: push
+      - SCRAPE_INTERVAL: 15
+    envs_from_files:
+      - ./shared/common.env
+
+    # Secrets stay ECS valueFrom references - they are never resolved to
+    # plaintext in the task definition. `secrets` (legacy) and `secrets_envs`
+    # behave for a sidecar exactly as they do for the application container,
+    # including the rule that a non-empty legacy `secrets` list wins outright.
+    secrets_envs:
+      - id: arn:aws:secretsmanager:us-east-1:123456789012:secret:metrics-abc123
+        values:
+          - REMOTE_WRITE_USER
+          - REMOTE_WRITE_PASSWORD
+
+    secret_files:
+      - metrics-client-cert
+    secrets_files_path: /etc/metrics-secrets
+
+    writable_dirs:
+      - /tmp
+      - /var/run
+
+    health_check:
+      command: "wget -q -O- http://127.0.0.1:9090/-/healthy || exit 1"
+      interval: 15
+      timeout: 3
+      retries: 2
+      start_period: 20
+
+    linux_parameters:
+      init_process_enabled: true
+      capabilities:
+        drop:
+          - ALL
+
+    port: 9090
+    additional_ports:
+      - agent-admin: 9091
+    app_protocol: http
+
+    cpu: 128
+    memory: 256
+    memory_reservation: 128
+
+    readonly_root_filesystem: true
+    log_stream_prefix: metrics-agent
