@@ -17,6 +17,7 @@ This GitHub Action automates the deployment of containerized applications to Ama
 - Integration with GitHub Actions workflow
 - **EC2 and Fargate launch type support**
 - **Linux parameters configuration** (init process, capabilities, shared memory, devices)
+- **Template mode**: deploy from a Terraform-managed task definition, swapping only the image
 
 ## Deployment Types
 
@@ -39,7 +40,9 @@ Deploy standalone task definitions that can be triggered manually or by external
 | `task_name` | The name of the task (required when `deployment_type=scheduled_task` or `triggerable_task`) | No | - |
 | `image_name` | The name of the Docker image | Yes | - |
 | `tag` | The tag of the Docker image | Yes | - |
-| `task_config_yaml` | Path to the YAML file containing task configuration | Yes | - |
+| `task_config_yaml` | Path to the YAML file containing task configuration (required when `task_definition_source=yaml`) | No | - |
+| `task_definition_source` | `yaml` (from `task_config_yaml`) or `template` (copy the service's Terraform-managed template, see [Template Mode](docs/template.md)) | No | `yaml` |
+| `container_name` | Template mode only: the container whose image is replaced | No | `app` |
 | `aws_account_id` | The AWS account ID | Yes | - |
 | `aws_region` | The AWS region | Yes | - |
 | `ecs_cluster` | The name of the ECS cluster | Yes | - |
@@ -157,6 +160,14 @@ jobs:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
           aws_region: us-east-1
 ```
+
+## Template Mode
+
+With `task_definition_source: template`, the task definition comes from the service's Terraform-managed template
+([`terraform-aws-ecs-service`](https://github.com/delivops/terraform-aws-ecs-service) >= 3.2.0,
+`task_definition_template`) instead of a YAML file: the action copies the template's latest revision into the
+service's family, replaces one container's image, and deploys it. See [docs/template.md](docs/template.md) for
+the SSM contract, desired count and IAM.
 
 ## Task Configuration
 

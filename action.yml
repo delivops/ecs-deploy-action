@@ -22,8 +22,16 @@ inputs:
     description: 'The tag of the Docker image'
     required: true
   task_config_yaml:
-    description: 'Path to the YAML file containing task configuration'
-    required: true
+    description: 'Path to the YAML file containing task configuration (required when task_definition_source=yaml)'
+    required: false
+  task_definition_source:
+    description: 'Where the task definition comes from: yaml (task_config_yaml, the default) or template (the service''s Terraform-managed template family, published to SSM by terraform-aws-ecs-service >= 3.2.0 task_definition_template). Template mode supports deployment_type=service only.'
+    default: 'yaml'
+    required: false
+  container_name:
+    description: 'Template mode only: the container whose image this deploy replaces'
+    default: 'app'
+    required: false
   aws_account_id:
     description: 'The AWS account ID'
     required: true
@@ -53,6 +61,28 @@ inputs:
 runs:
   using: "composite"
   steps:
+    # Only for non-default sources, so YAML callers run no new step. Fails before any AWS call.
+    - id: validate-inputs
+      if: ${{ inputs.task_definition_source != 'yaml' }}
+      env:
+        SOURCE: ${{ inputs.task_definition_source }}
+        TASK_CONFIG_YAML: ${{ inputs.task_config_yaml }}
+        DEPLOYMENT_TYPE: ${{ inputs.deployment_type }}
+      run: |
+        if [ "$SOURCE" != "template" ]; then
+          echo "::error::task_definition_source must be 'yaml' or 'template', got '$SOURCE'"
+          exit 1
+        fi
+        if [ -n "$TASK_CONFIG_YAML" ]; then
+          echo "::error::task_config_yaml is not used with task_definition_source=template; remove it (the task definition comes from the Terraform-managed template)"
+          exit 1
+        fi
+        if [ "$DEPLOYMENT_TYPE" != "service" ]; then
+          echo "::error::task_definition_source=template supports deployment_type=service only, got '$DEPLOYMENT_TYPE'"
+          exit 1
+        fi
+      shell: bash
+
     - uses: aws-actions/configure-aws-credentials@v6
       with:
         role-to-assume: "arn:aws:iam::${{ inputs.aws_account_id }}:role/${{ inputs.aws_role }}"
@@ -88,6 +118,7 @@ runs:
       shell: bash
 
     - id: generate-task-def
+      if: ${{ inputs.task_definition_source == 'yaml' }}
       run: |
         python3 ${{ github.action_path }}/scripts/generate_task_def.py \
           "${{ inputs.task_config_yaml }}" \
@@ -100,6 +131,22 @@ runs:
           "${{ steps.determine-name.outputs.name }}"
       shell: bash
 
+    - id: template-task-def
+      if: ${{ inputs.task_definition_source == 'template' }}
+      env:
+        CLUSTER: ${{ inputs.ecs_cluster }}
+        REGION: ${{ inputs.aws_region }}
+        CONTAINER_REGISTRY: ${{ steps.define-registry.outputs.container_registry }}
+        IMAGE_NAME: ${{ inputs.image_name }}
+        TAG: ${{ inputs.tag }}
+        SERVICE: ${{ steps.determine-name.outputs.name }}
+        CONTAINER_NAME: ${{ inputs.container_name }}
+      run: |
+        python3 ${{ github.action_path }}/scripts/template_task_def.py \
+          "$CLUSTER" "$REGION" "$CONTAINER_REGISTRY" "$IMAGE_NAME" "$TAG" "$SERVICE" \
+          --container-name "$CONTAINER_NAME"
+      shell: bash
+
     # ECS Service Deployment
     - uses: aws-actions/amazon-ecs-deploy-task-definition@v2.6.1
       if: ${{ inputs.deployment_type == 'service' && inputs.dry_run == 'false' }}
@@ -108,7 +155,8 @@ runs:
         task-definition: task-definition.json
         service: ${{ inputs.ecs_service }}
         cluster: ${{ inputs.ecs_cluster }}
-        desired-count: ${{ steps.generate-task-def.outputs.replica_count }}
+        # Empty leaves the service's desired count alone. For YAML callers this is exactly the old expression.
+        desired-count: ${{ inputs.task_definition_source == 'template' && steps.template-task-def.outputs.replica_count || steps.generate-task-def.outputs.replica_count }}
         wait-for-service-stability: true
         # Preserve the Terraform-managed propagate_tags setting on the service.
         # amazon-ecs-deploy-task-definition always sends propagateTags in its
