@@ -32,12 +32,12 @@
         "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:app-secrets-abc123:DATABASE_URL::"
       }
     ],
-    "jobRoleArn": "arn:aws:iam::123456789012:role/app",
-    "executionRoleArn": "arn:aws:iam::123456789012:role/app",
+    "jobRoleArn": "arn:aws:iam::123456789012:role/nightly-report",
+    "executionRoleArn": "arn:aws:iam::123456789012:role/nightly-report-execution",
     "logConfiguration": {
       "logDriver": "awslogs",
       "options": {
-        "awslogs-group": "/ecs/test-cluster/nightly-report",
+        "awslogs-group": "/batch/nightly-report",
         "awslogs-region": "us-east-1",
         "awslogs-stream-prefix": "batch"
       }

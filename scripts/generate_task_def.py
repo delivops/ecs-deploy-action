@@ -1011,9 +1011,13 @@ class RoleResolver:
             self.logger.info(f"{td_key} resolved from SSM parameter {name}")
 
         if missing:
-            raise RoleResolutionError(self._unresolved_message(missing))
+            self._on_unresolved(missing)
 
         return resolved
+
+    def _on_unresolved(self, missing: List[tuple]) -> None:
+        """Both ECS slots are mandatory, so anything SSM did not return is fatal."""
+        raise RoleResolutionError(self._unresolved_message(missing))
 
     def _client_error(self, error, names: List[str]) -> RoleResolutionError:
         """Translate a botocore ClientError into an actionable message."""
@@ -1024,8 +1028,8 @@ class RoleResolver:
             return RoleResolutionError(
                 f"Access denied reading role ARNs from SSM ({joined}). The deploy "
                 f"role needs ssm:GetParameters (plural) on "
-                f"arn:aws:ssm:{self.aws_region}:<account-id>:parameter/ecs/"
-                f"{self.cluster_name}/{self.service_name}/*. Alternatively set "
+                f"arn:aws:ssm:{self.aws_region}:<account-id>:parameter"
+                f"{self._ssm_name('*')}. Alternatively set "
                 f"task_role_arn / execution_role_arn (or role_arn) in the YAML."
             )
         if code in ('ThrottlingException', 'TooManyUpdates', 'RequestLimitExceeded'):

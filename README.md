@@ -32,14 +32,14 @@ Deploy EventBridge-scheduled tasks that run on a schedule. Infrastructure (Event
 Deploy standalone task definitions that can be triggered manually or by external systems (e.g., Lambda, Step Functions, other workflows). Only registers the task definition without any EventBridge configuration.
 
 ### AWS Batch Job Definitions
-Register a new revision of an AWS Batch job definition (`type: container`) from the same YAML format. `task_name` is the job definition name, `ecs_cluster` is optional, and the new revision's ARN is returned as the `job_definition_arn` output. See [docs/batch.md](docs/batch.md).
+Register a new revision of an AWS Batch job definition (`type: container`) from the same YAML format. `task_name` is the job definition name and the job's whole identity (roles from SSM `/batch/<task_name>/…`, logs to `/batch/<task_name>`); `ecs_cluster` is not used. The new revision's ARN is returned as the `job_definition_arn` output. See [docs/batch.md](docs/batch.md).
 
 | `deployment_type` | Registers | Name input | `ecs_cluster` | Then |
 |---|---|---|---|---|
 | `service` | ECS task definition | `ecs_service` | required | updates the service and waits for stability |
 | `scheduled_task` | ECS task definition | `task_name` | required | points the EventBridge rule at it |
 | `triggerable_task` | ECS task definition | `task_name` | required | nothing |
-| `batch_job_definition` | AWS Batch job definition | `task_name` | optional | optionally deregisters older revisions |
+| `batch_job_definition` | AWS Batch job definition | `task_name` | not used | optionally deregisters older revisions |
 
 ## Inputs
 
@@ -56,7 +56,7 @@ Register a new revision of an AWS Batch job definition (`type: container`) from 
 | `container_name` | Template mode only: the container whose image is replaced | No | `app` |
 | `aws_account_id` | The AWS account ID | Yes | - |
 | `aws_region` | The AWS region | Yes | - |
-| `ecs_cluster` | The name of the ECS cluster. Required for every type except `batch_job_definition`, where it is optional | Yes* | - |
+| `ecs_cluster` | The name of the ECS cluster. Required for every type except `batch_job_definition`, which doesn't use it | Yes* | - |
 | `aws_role` | The AWS IAM role to assume | No | `github_services` |
 | `dry_run` | Whether to perform a dry run | No | `false` |
 | `ecr_registry` | Use ECR registry for main container image | No | `true` |
@@ -190,7 +190,6 @@ jobs:
           environment: production
           deployment_type: batch_job_definition
           task_name: nightly-report
-          ecs_cluster: production   # optional: SSM role fallback + /ecs/<cluster>/<task_name> logs
           image_name: nightly-report
           tag: ${{ github.sha }}
           task_config_yaml: config/batch.yaml
@@ -198,9 +197,10 @@ jobs:
           aws_region: us-east-1
 ```
 
-In the YAML, `cpu` is in **vCPUs** for this type. See [docs/batch.md](docs/batch.md) for the key
-mapping, Batch-only keys (`platform`, `timeout_seconds`, `retry_attempts`, `parameters`,
-`propagate_tags`, `deregister_previous`) and the IAM permissions.
+`cpu` stays in ECS CPU units (1024 = 1 vCPU) and is converted for Batch. See
+[docs/batch.md](docs/batch.md) for the key mapping, Batch-only keys (`platform`, `log_group`,
+`timeout_seconds`, `retry_attempts`, `parameters`, `propagate_tags`, `deregister_previous`) and
+the IAM permissions.
 
 ## Template Mode
 
@@ -266,8 +266,8 @@ Both roles are mandatory. If a slot cannot be resolved from any of the three sou
   This is only needed for the SSM fallback — specifying roles in YAML requires no new permission.
 - `scheduled_task` and `triggerable_task` deployments are not managed by the ECS service module,
   so no SSM parameter exists for them. **Set the role ARNs in YAML for those.**
-- `batch_job_definition` maps them to `jobRoleArn` / `executionRoleArn` and uses the SSM fallback
-  only when `ecs_cluster` is set — see [docs/batch.md](./docs/batch.md#roles).
+- `batch_job_definition` maps them to `jobRoleArn` / `executionRoleArn` and falls back to its own
+  SSM path `/batch/<task_name>/job-role` / `execution-role` — see [docs/batch.md](./docs/batch.md#roles).
 
 See [docs/roles.md](./docs/roles.md) for the full details.
 

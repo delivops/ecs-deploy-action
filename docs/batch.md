@@ -11,6 +11,12 @@ IAM roles stay in Terraform, and whatever submits the jobs (a schedule, Step Fun
 workflow) references the job definition by name, which always resolves to its latest ACTIVE
 revision.
 
+A job definition name is unique per AWS account and region — Batch has no cluster/service pair
+like ECS — so `task_name` is the job's whole identity: roles fall back to SSM
+`/batch/<task_name>/…` and logs go to `/batch/<task_name>`. Nothing about a Batch job uses
+`ecs_cluster` or the `/ecs/…` conventions. Two environments sharing one account need different
+`task_name`s (e.g. `prod-report`, `staging-report`), exactly as Batch itself requires.
+
 ## Usage
 
 ```yaml
@@ -21,7 +27,6 @@ revision.
     environment: production
     deployment_type: batch_job_definition
     task_name: nightly-report          # the job definition name
-    ecs_cluster: production            # optional, see below
     image_name: nightly-report
     tag: ${{ github.sha }}
     task_config_yaml: config/batch.yaml
@@ -35,7 +40,7 @@ revision.
 |---|---|
 | `task_name` | **Required.** The job definition name: up to 128 letters, digits, `-` and `_`. |
 | `task_config_yaml` | **Required.** Only `task_definition_source: yaml` is supported. |
-| `ecs_cluster` | Optional. When set, enables the SSM role fallback and the `/ecs/<cluster>/<task_name>` log group (below). |
+| `ecs_cluster` | Not used. |
 | `dry_run` | `true` writes and prints `job-definition.json` and registers nothing. |
 
 Output: `job_definition_arn` — the ARN of the new revision (empty on a dry run).
@@ -46,12 +51,12 @@ Existing keys are reused where they mean the same thing:
 
 | YAML key | Job definition | Notes |
 |---|---|---|
-| `cpu` | `resourceRequirements` `VCPU` | **In vCPUs, not ECS CPU units.** Fractional values (`0.25`, `0.5`) on Fargate only. Default `1`. |
+| `cpu` | `resourceRequirements` `VCPU` | **ECS CPU units, as for every type** (1024 = 1 vCPU), converted to vCPUs. Default `1024`. |
 | `memory` | `resourceRequirements` `MEMORY` | MiB. Default `2048`. On Fargate it must be a valid combination with `cpu` (same table as ECS Fargate). |
 | `command` | `containerProperties.command` | Omitted when empty, so the image's `CMD` applies. |
 | `envs`, `envs_from_files` | `containerProperties.environment` | Same rules as ECS. |
 | `secrets`, `secrets_envs` (both formats) | `containerProperties.secrets` | All three formats, including SSM parameter ARNs — see [secrets.md](secrets.md). |
-| `task_role_arn` / `execution_role_arn` / `role_arn` | `jobRoleArn` / `executionRoleArn` | Same order as ECS — see [Roles](#roles). |
+| `task_role_arn` / `execution_role_arn` / `role_arn` | `jobRoleArn` / `executionRoleArn` | YAML first, then SSM `/batch/<task_name>/…` — see [Roles](#roles). |
 | `cpu_arch` | `runtimePlatform.cpuArchitecture` | Fargate only (`X86_64` default, or `ARM64`). On EC2 the compute environment decides. |
 | `ephemeral_storage` | `ephemeralStorage.sizeInGiB` | Fargate only, 21–200. |
 | `services_overrides.<task_name>` | — | Applied with `task_name` as the key, exactly like a service name. |
@@ -61,25 +66,34 @@ Batch-only keys:
 | YAML key | Job definition | Default |
 |---|---|---|
 | `platform` | `platformCapabilities` | `EC2` (or `FARGATE`) |
+| `log_group` | `logConfiguration` `awslogs-group` | `/batch/<task_name>` |
 | `timeout_seconds` | `timeout.attemptDurationSeconds` | none; at least 60 |
 | `retry_attempts` | `retryStrategy.attempts` | `1`; 1–10 |
 | `parameters` | `parameters` (defaults for `Ref::<name>`) | none |
 | `propagate_tags` | `propagateTags` | `true` |
 | `deregister_previous` | deregisters older ACTIVE revisions after registering | `false` |
 
-### `cpu` is in vCPUs
+### `cpu` is in CPU units
 
-ECS task configs express `cpu` in CPU units (`1024` = 1 vCPU). Batch takes vCPUs. A value that
-looks like CPU units (a multiple of 256, such as `256` or `1024`) is rejected with a hint, so a YAML
-shared with a service can't accidentally ask for 1024 vCPUs. Override it for the job instead:
+`cpu` means the same thing for every deployment type: ECS CPU units, 1024 = 1 vCPU. The action
+divides by 1024 for Batch, so a YAML shared with a service needs no translation:
+
+| `cpu` | Batch vCPUs | Platform |
+|---|---|---|
+| `256` / `512` | 0.25 / 0.5 | Fargate only |
+| `1024`, `2048`, `4096`, … | 1, 2, 4, … | EC2 and Fargate |
+
+AWS Batch on EC2 takes whole vCPUs, so there `cpu` must be a multiple of 1024 (the error names
+the nearest valid values). On Fargate, `cpu` and `memory` must be one of the Fargate
+combinations — the same table as ECS Fargate, plus 32768 (32 vCPUs). A size for the job only
+goes under its `services_overrides` entry:
 
 ```yaml
-cpu: 512          # the service: ECS CPU units
+cpu: 512          # the service, and the job unless overridden: 0.5 vCPU
 memory: 1024
 services_overrides:
   nightly-report: # the job (task_name)
     platform: FARGATE
-    cpu: 0.5      # vCPUs
     memory: 2048
 ```
 
@@ -114,23 +128,38 @@ revision other than the one just registered is deregistered after a successful r
 
 ## Roles
 
+The job takes the same two IAM roles as an ECS task — both trust `ecs-tasks.amazonaws.com`,
+because Batch runs the container on ECS underneath. Each slot is resolved on its own, first match
+wins:
+
 | Precedence | `jobRoleArn` | `executionRoleArn` |
 |---|---|---|
 | 1 | YAML `task_role_arn` | YAML `execution_role_arn` |
 | 2 | YAML `role_arn` | YAML `role_arn` |
-| 3 | SSM `/ecs/<cluster>/<task_name>/task-role` | SSM `/ecs/<cluster>/<task_name>/execution-role` |
+| 3 | SSM `/batch/<task_name>/job-role` | SSM `/batch/<task_name>/execution-role` |
 
-Step 3 runs only when `ecs_cluster` is set, and then — as for ECS — both slots are mandatory and
-an unresolved one fails the deploy. Without `ecs_cluster` there is no SSM fallback: the job role
-is optional, and the execution role is required only where Batch needs one (`platform: FARGATE`,
-or any secrets).
+The SSM lookup is one batched `GetParameters` call, skipped when the YAML sets both slots. Publish
+the parameters from the Terraform that creates the roles, for example:
+
+```hcl
+resource "aws_ssm_parameter" "job_role" {
+  name  = "/batch/nightly-report/job-role"
+  type  = "String"
+  value = aws_iam_role.job.arn
+}
+```
+
+A slot that is still empty is not automatically an error: the job role is optional (a job that
+calls no AWS APIs needs none), and the execution role is required only where Batch needs one —
+`platform: FARGATE`, or any secrets. Then the deploy fails, naming both the YAML key and the SSM
+parameter it tried. The ECS path `/ecs/<cluster>/<name>/…` is never read for a Batch job.
 
 ## Logging
 
-With `ecs_cluster` set, the container logs with `awslogs` to `/ecs/<cluster>/<task_name>`
-(stream prefix `batch`) — the same group naming as the ECS types. The log group must exist
-(create it in Terraform). Without `ecs_cluster`, no log configuration is set and Batch's default
-group `/aws/batch/job` is used.
+Every job definition logs with `awslogs` to its own group: `/batch/<task_name>` by default, or the
+YAML `log_group` (which can differ per job under `services_overrides`). The stream prefix is
+`batch`. The group must exist — create it in Terraform with a retention period; the action never
+creates it, so it can't leave a group that keeps logs forever.
 
 ## IAM permissions
 
@@ -142,7 +171,7 @@ The deploy role (`aws_role`) needs:
 | `batch:DescribeJobDefinitions` | `*` (it does not support resource-level permissions) | `deregister_previous: true` |
 | `batch:DeregisterJobDefinition` | `arn:aws:batch:<region>:<account>:job-definition/<task_name>:*` | `deregister_previous: true` |
 | `iam:PassRole` | the job role and the execution role | whenever a role is set |
-| `ssm:GetParameters` | `arn:aws:ssm:<region>:<account>:parameter/ecs/<cluster>/<task_name>/*` | SSM role fallback |
+| `ssm:GetParameters` | `arn:aws:ssm:<region>:<account>:parameter/batch/<task_name>/*` | whenever the YAML doesn't set both roles |
 | `secretsmanager:GetSecretValue` | the named secrets | `secrets_envs` name-only format (key discovery) |
 
 The execution role needs, as for ECS: ECR pull, `logs:CreateLogStream` / `logs:PutLogEvents` on
@@ -157,7 +186,7 @@ customer-managed keys) on every secret the job references.
 a service, with the job's Fargate settings under `services_overrides`.
 
 ```yaml
-cpu: 2
+cpu: 2048          # 2 vCPUs
 memory: 4096
 command: ["python", "-m", "worker", "--date", "Ref::date"]
 envs:

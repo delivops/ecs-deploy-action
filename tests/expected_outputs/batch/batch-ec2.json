@@ -48,7 +48,7 @@
     "logConfiguration": {
       "logDriver": "awslogs",
       "options": {
-        "awslogs-group": "/ecs/test-cluster/batch-ec2",
+        "awslogs-group": "/batch/workers/batch-ec2",
         "awslogs-region": "us-east-1",
         "awslogs-stream-prefix": "batch"
       }

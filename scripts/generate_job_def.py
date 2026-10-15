@@ -8,6 +8,11 @@ formats, image URI and role resolution - so the two paths cannot drift apart.
 
 Output is the request body of `aws batch register-job-definition
 --cli-input-json`: a "container" job with containerProperties.
+
+A Batch job definition name is unique per account and region, so the job's
+identity is `task_name` alone: roles fall back to SSM /batch/<task_name>/... and
+logs go to /batch/<task_name>. Nothing here reads the ECS cluster or the /ecs/...
+conventions.
 """
 import argparse
 import json
@@ -15,7 +20,7 @@ import logging
 import os
 import re
 import sys
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -37,6 +42,12 @@ JOB_DEFINITION_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]{1,128}$')
 # Batch parameter names are substituted as Ref::<name>.
 PARAMETER_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
 
+# CloudWatch Logs log group names.
+LOG_GROUP_PATTERN = re.compile(r'^[.\-_/#A-Za-z0-9]{1,512}$')
+
+# `cpu` keeps its ECS meaning (CPU units) for every deployment type.
+CPU_UNITS_PER_VCPU = 1024
+
 # Fargate vCPU -> valid memory (MiB), from the Batch ResourceRequirement docs.
 FARGATE_MEMORY_FOR_VCPU = {
     Decimal('0.25'): [512, 1024, 2048],
@@ -49,14 +60,14 @@ FARGATE_MEMORY_FOR_VCPU = {
     Decimal('32'): [61440, 122880, 249856],
 }
 
-DEFAULT_VCPUS = 1
+DEFAULT_CPU = 1024  # 1 vCPU
 DEFAULT_MEMORY = 2048
 
 # Every top-level YAML key the Batch renderer reads. Anything else in the YAML
 # (ports, health_check, sidecars, replica_count, ...) has no Batch equivalent
 # and is ignored with a warning, so a YAML shared with a service still works.
 BATCH_KEYS = frozenset({
-    'name', 'cpu', 'memory', 'cpu_arch', 'ephemeral_storage',
+    'name', 'cpu', 'memory', 'cpu_arch', 'ephemeral_storage', 'log_group',
     'command', 'envs', 'secrets', 'secrets_envs',
     'role_arn', 'task_role_arn', 'execution_role_arn',
     'platform', 'timeout_seconds', 'retry_attempts', 'parameters',
@@ -100,37 +111,33 @@ def _parameter_value(value: Any) -> str:
 
 
 def parse_vcpus(raw: Any, platform: str) -> Decimal:
-    """`cpu` in vCPUs for Batch. Fractional values are Fargate-only."""
-    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
-        raise ValidationError(f"cpu must be a number of vCPUs, got {raw!r}")
-    try:
-        value = Decimal(str(raw).strip())
-    except InvalidOperation:
-        raise ValidationError(f"cpu must be a number of vCPUs, got {raw!r}")
-    if not value.is_finite() or value <= 0:
-        raise ValidationError(f"cpu must be a positive number of vCPUs, got {raw!r}")
+    """Convert `cpu` - ECS CPU units, as for every other type - to Batch vCPUs.
 
-    # ECS task configs express cpu in CPU units (1024 = 1 vCPU). Catch a shared
-    # YAML's `cpu: 256` before it asks Batch for 256 vCPUs.
-    if value >= 256 and value % 256 == 0:
+    1024 units = 1 vCPU. Fargate takes the fractional sizes (256 -> 0.25);
+    EC2 compute environments take whole vCPUs only.
+    """
+    if not _is_positive_int(raw):
         raise ValidationError(
-            f"cpu is {raw} - for batch_job_definition cpu is a number of vCPUs, not "
-            f"ECS CPU units. Did you mean {_format_vcpus(value / 1024)}? Override it "
-            f"for this job under services_overrides.<task_name>.cpu."
+            f"cpu must be a positive integer of CPU units (1024 = 1 vCPU), got {raw!r}"
         )
+    vcpus = Decimal(raw) / CPU_UNITS_PER_VCPU
 
     if platform == 'FARGATE':
-        if value not in FARGATE_MEMORY_FOR_VCPU:
+        if vcpus not in FARGATE_MEMORY_FOR_VCPU:
+            valid = [int(v * CPU_UNITS_PER_VCPU) for v in FARGATE_MEMORY_FOR_VCPU]
             raise ValidationError(
-                f"Invalid cpu {raw} for platform FARGATE. Must be one of "
-                f"{[_format_vcpus(v) for v in FARGATE_MEMORY_FOR_VCPU]} vCPUs."
+                f"Invalid cpu {raw} for platform FARGATE. Must be one of {valid} "
+                f"CPU units (1024 = 1 vCPU)."
             )
-    elif value != value.to_integral_value():
+    elif raw % CPU_UNITS_PER_VCPU:
+        lower = raw // CPU_UNITS_PER_VCPU * CPU_UNITS_PER_VCPU
+        nearest = [v for v in (lower, lower + CPU_UNITS_PER_VCPU) if v > 0]
         raise ValidationError(
-            f"Invalid cpu {raw} for platform EC2: fractional vCPUs are only "
-            f"supported on FARGATE. Use a whole number of vCPUs."
+            f"Invalid cpu {raw} for platform EC2: AWS Batch on EC2 takes whole vCPUs, "
+            f"so cpu must be a multiple of 1024 (nearest: {nearest}). Fractional "
+            f"vCPUs need platform FARGATE."
         )
-    return value
+    return vcpus
 
 
 def parse_memory(raw: Any, vcpus: Decimal, platform: str) -> int:
@@ -161,8 +168,16 @@ def validate_batch_config(config: Dict[str, Any]) -> None:
         raise ValidationError(f"Invalid platform: {platform!r}. Must be one of {list(PLATFORMS)}")
     platform = platform.upper()
 
-    vcpus = parse_vcpus(config.get('cpu', DEFAULT_VCPUS), platform)
+    vcpus = parse_vcpus(config.get('cpu', DEFAULT_CPU), platform)
     parse_memory(config.get('memory', DEFAULT_MEMORY), vcpus, platform)
+
+    log_group = config.get('log_group')
+    if log_group is not None and (not isinstance(log_group, str)
+                                  or not LOG_GROUP_PATTERN.match(log_group)):
+        raise ValidationError(
+            f"log_group must be a CloudWatch Logs group name (letters, digits and "
+            f"._-/#, up to 512 characters), got {log_group!r}"
+        )
 
     for key in ('propagate_tags', 'deregister_previous'):
         value = config.get(key)
@@ -234,47 +249,58 @@ def warn_ignored_keys(config: Dict[str, Any]) -> List[str]:
     return ignored
 
 
-def resolve_job_roles(config: Dict[str, Any], cluster_name: Optional[str],
-                      job_name: str, aws_region: str, platform: str,
-                      has_secrets: bool) -> Dict[str, str]:
-    """Resolve jobRoleArn / executionRoleArn.
+class BatchRoleResolver(RoleResolver):
+    """jobRoleArn / executionRoleArn for a Batch job definition.
 
-    Same order as the ECS types - per-slot YAML key, then role_arn - and, when
-    an ecs_cluster is given, the same SSM parameters /ecs/<cluster>/<name>/...
-    (both slots mandatory, exactly as RoleResolver enforces). Without a cluster
-    there is no SSM fallback: the job role is optional, and the execution role
-    is required only where Batch needs it (Fargate, or any secrets).
+    Same precedence as the ECS types - per-slot YAML key, then role_arn, then
+    SSM - but the SSM parameters live under the job's own Batch path:
+
+        /batch/<task_name>/job-role
+        /batch/<task_name>/execution-role
+
+    Unlike ECS, an unresolved slot is not fatal here: the job role is optional,
+    and require_execution_role decides whether the execution role is.
     """
-    if cluster_name:
-        resolved = RoleResolver(cluster_name, job_name, aws_region).resolve(config)
-    else:
-        shared = normalize_role_value(config, 'role_arn', RoleResolutionError)
-        resolved = {}
-        for yaml_key, td_key, _ in RoleResolver.SLOTS:
-            value = normalize_role_value(config, yaml_key, RoleResolutionError) or shared
-            if value:
-                validate_role_arn(value, f"YAML key '{yaml_key}' / 'role_arn'", RoleResolutionError)
-                resolved[td_key] = value
 
-        if 'executionRoleArn' not in resolved and (platform == 'FARGATE' or has_secrets):
-            reason = "platform FARGATE" if platform == 'FARGATE' else "secrets"
-            raise RoleResolutionError(
-                f"Could not determine executionRoleArn for job definition '{job_name}': "
-                f"{reason} requires one. Set 'execution_role_arn' (or 'role_arn') in "
-                f"the task config YAML, or pass ecs_cluster to read it from SSM "
-                f"/ecs/<cluster>/{job_name}/execution-role."
-            )
+    SLOTS = (
+        ("task_role_arn", "jobRoleArn", "job-role"),
+        ("execution_role_arn", "executionRoleArn", "execution-role"),
+    )
 
-    roles = {}
-    if 'taskRoleArn' in resolved:
-        roles['jobRoleArn'] = resolved['taskRoleArn']
-    if 'executionRoleArn' in resolved:
-        roles['executionRoleArn'] = resolved['executionRoleArn']
+    def __init__(self, job_name: str, aws_region: str):
+        super().__init__(cluster_name=None, service_name=job_name, aws_region=aws_region)
+
+    def _ssm_name(self, suffix: str) -> str:
+        return f"/batch/{self.service_name}/{suffix}"
+
+    def _on_unresolved(self, missing: List[tuple]) -> None:
+        for name, td_key, yaml_key in missing:
+            self.logger.info(f"{td_key} not set: no YAML key '{yaml_key}' / 'role_arn' "
+                             f"and no SSM parameter {name}")
+
+
+def resolve_job_roles(config: Dict[str, Any], job_name: str, aws_region: str,
+                      platform: str, has_secrets: bool) -> Dict[str, str]:
+    """Resolve the two role slots; the execution role is required where Batch needs it."""
+    roles = BatchRoleResolver(job_name, aws_region).resolve(config)
+
+    if 'executionRoleArn' not in roles and (platform == 'FARGATE' or has_secrets):
+        reason = "platform FARGATE" if platform == 'FARGATE' else "secrets"
+        raise RoleResolutionError(
+            f"Could not determine executionRoleArn for job definition '{job_name}': "
+            f"{reason} requires one.\n"
+            f"  Tried, in order:\n"
+            f"    1. YAML key 'execution_role_arn' - not set\n"
+            f"    2. YAML key 'role_arn'           - not set\n"
+            f"    3. SSM parameter /batch/{job_name}/execution-role - not returned (it does\n"
+            f"       not exist, or the deploy role lacks ssm:GetParameters on it)\n"
+            f"  Fix one of: set 'execution_role_arn' (or 'role_arn') in the task config\n"
+            f"  YAML, or publish /batch/{job_name}/execution-role from Terraform."
+        )
     return roles
 
 
-def generate_job_definition(config: Dict[str, Any], job_name: str,
-                            cluster_name: Optional[str], aws_region: str,
+def generate_job_definition(config: Dict[str, Any], job_name: str, aws_region: str,
                             container_registry: Optional[str], image_name: str,
                             tag: str) -> Dict[str, Any]:
     """Render a register-job-definition request body from a loaded config."""
@@ -288,7 +314,7 @@ def generate_job_definition(config: Dict[str, Any], job_name: str,
     warn_ignored_keys(config)
 
     platform = config.get('platform', 'EC2').upper()
-    vcpus = parse_vcpus(config.get('cpu', DEFAULT_VCPUS), platform)
+    vcpus = parse_vcpus(config.get('cpu', DEFAULT_CPU), platform)
     memory = parse_memory(config.get('memory', DEFAULT_MEMORY), vcpus, platform)
 
     secrets = SecretManager.build_secrets_from_config(config)
@@ -310,23 +336,18 @@ def generate_job_definition(config: Dict[str, Any], job_name: str,
     if secrets:
         container["secrets"] = secrets
 
-    container.update(resolve_job_roles(
-        config, cluster_name, job_name, aws_region, platform, bool(secrets)
-    ))
+    container.update(resolve_job_roles(config, job_name, aws_region, platform, bool(secrets)))
 
-    # Same log group convention as the ECS types. Without a cluster there is no
-    # convention to follow, so Batch's default (/aws/batch/job) applies.
-    if cluster_name:
-        container["logConfiguration"] = {
-            "logDriver": "awslogs",
-            "options": {
-                "awslogs-group": f"/ecs/{cluster_name}/{job_name}",
-                "awslogs-region": aws_region,
-                "awslogs-stream-prefix": "batch",
-            },
-        }
-    else:
-        logger.info("No ecs_cluster given: logs go to Batch's default group /aws/batch/job")
+    # Always set: one group per job definition, /batch/<task_name> unless the
+    # YAML names one. The group must exist (Terraform owns it and its retention).
+    container["logConfiguration"] = {
+        "logDriver": "awslogs",
+        "options": {
+            "awslogs-group": config.get('log_group') or f"/batch/{job_name}",
+            "awslogs-region": aws_region,
+            "awslogs-stream-prefix": "batch",
+        },
+    }
 
     if platform == 'FARGATE':
         container["runtimePlatform"] = {
@@ -380,8 +401,6 @@ def parse_args(argv=None):
     parser.add_argument('container_registry', help='Registry for the image (empty for none)')
     parser.add_argument('image_name', help='Container image name')
     parser.add_argument('tag', help='Container image tag')
-    parser.add_argument('--cluster', default='',
-                        help='ECS cluster: enables the SSM role fallback and the /ecs/<cluster>/<name> log group')
     parser.add_argument('--output', '-o', default='job-definition.json')
     return parser.parse_args(argv)
 
@@ -393,7 +412,7 @@ def main(argv=None) -> int:
             raise ValidationError(f"YAML file not found: {args.yaml_file}")
         config = load_batch_config(args.yaml_file, args.job_name)
         job_definition = generate_job_definition(
-            config, args.job_name, args.cluster or None, args.aws_region,
+            config, args.job_name, args.aws_region,
             args.container_registry, args.image_name, args.tag,
         )
     except RoleResolutionError as e:

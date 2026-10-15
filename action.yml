@@ -39,7 +39,7 @@ inputs:
     description: 'The AWS region'
     required: true
   ecs_cluster:
-    description: 'The name of the ECS cluster. Required for service, scheduled_task and triggerable_task. Optional for batch_job_definition, where it enables the SSM role fallback and the /ecs/<cluster>/<task_name> log group'
+    description: 'The name of the ECS cluster. Required for service, scheduled_task and triggerable_task; not used by batch_job_definition'
     required: false
   aws_role:
     description: 'The AWS IAM role to assume'
@@ -167,11 +167,9 @@ runs:
         CONTAINER_REGISTRY: ${{ steps.define-registry.outputs.container_registry }}
         IMAGE_NAME: ${{ inputs.image_name }}
         TAG: ${{ inputs.tag }}
-        CLUSTER: ${{ inputs.ecs_cluster }}
       run: |
         python3 ${{ github.action_path }}/scripts/generate_job_def.py \
-          "$TASK_CONFIG_YAML" "$JOB_NAME" "$REGION" "$CONTAINER_REGISTRY" "$IMAGE_NAME" "$TAG" \
-          --cluster "$CLUSTER"
+          "$TASK_CONFIG_YAML" "$JOB_NAME" "$REGION" "$CONTAINER_REGISTRY" "$IMAGE_NAME" "$TAG"
       shell: bash
 
     - id: template-task-def
