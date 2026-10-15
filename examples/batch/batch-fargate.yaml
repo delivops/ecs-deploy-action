@@ -1,0 +1,27 @@
+# AWS Batch job definition on Fargate, sharing a YAML with an ECS service.
+# The service keeps its ECS-sized cpu/memory; the job overrides them in vCPUs.
+cpu: 512
+memory: 1024
+port: 8080
+health_check:
+  command: "curl -f http://localhost:8080/health || exit 1"
+
+envs:
+  - APP_ENV: production
+
+secrets_envs:
+  - id: arn:aws:secretsmanager:us-east-1:123456789012:secret:app-secrets-abc123
+    values:
+      - DATABASE_URL
+
+role_arn: arn:aws:iam::123456789012:role/app
+
+services_overrides:
+  nightly-report:
+    platform: FARGATE
+    cpu: 0.5
+    memory: 2048
+    cpu_arch: ARM64
+    command: ["node", "dist/report.js"]
+    propagate_tags: false
+    deregister_previous: true

@@ -174,3 +174,4 @@ cython_debug/
 .pypirc
 
 task-definition.json
+job-definition.json

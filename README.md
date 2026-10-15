@@ -18,6 +18,7 @@ This GitHub Action automates the deployment of containerized applications to Ama
 - **EC2 and Fargate launch type support**
 - **Linux parameters configuration** (init process, capabilities, shared memory, devices)
 - **Template mode**: deploy from a Terraform-managed task definition, swapping only the image
+- **AWS Batch job definitions** from the same YAML (`deployment_type: batch_job_definition`)
 
 ## Deployment Types
 
@@ -30,14 +31,24 @@ Deploy EventBridge-scheduled tasks that run on a schedule. Infrastructure (Event
 ### Triggerable Tasks
 Deploy standalone task definitions that can be triggered manually or by external systems (e.g., Lambda, Step Functions, other workflows). Only registers the task definition without any EventBridge configuration.
 
+### AWS Batch Job Definitions
+Register a new revision of an AWS Batch job definition (`type: container`) from the same YAML format. `task_name` is the job definition name, `ecs_cluster` is optional, and the new revision's ARN is returned as the `job_definition_arn` output. See [docs/batch.md](docs/batch.md).
+
+| `deployment_type` | Registers | Name input | `ecs_cluster` | Then |
+|---|---|---|---|---|
+| `service` | ECS task definition | `ecs_service` | required | updates the service and waits for stability |
+| `scheduled_task` | ECS task definition | `task_name` | required | points the EventBridge rule at it |
+| `triggerable_task` | ECS task definition | `task_name` | required | nothing |
+| `batch_job_definition` | AWS Batch job definition | `task_name` | optional | optionally deregisters older revisions |
+
 ## Inputs
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `environment` | The environment to deploy to | Yes | - |
-| `deployment_type` | Deployment type: `service`, `scheduled_task`, or `triggerable_task` | No | `service` |
+| `deployment_type` | Deployment type: `service`, `scheduled_task`, `triggerable_task`, or `batch_job_definition` | No | `service` |
 | `ecs_service` | The name of the ECS service (required when `deployment_type=service`) | No | - |
-| `task_name` | The name of the task (required when `deployment_type=scheduled_task` or `triggerable_task`) | No | - |
+| `task_name` | The name of the task (required when `deployment_type=scheduled_task` or `triggerable_task`); the job definition name for `batch_job_definition` | No | - |
 | `image_name` | The name of the Docker image | Yes | - |
 | `tag` | The tag of the Docker image | Yes | - |
 | `task_config_yaml` | Path to the YAML file containing task configuration (required when `task_definition_source=yaml`) | No | - |
@@ -45,11 +56,19 @@ Deploy standalone task definitions that can be triggered manually or by external
 | `container_name` | Template mode only: the container whose image is replaced | No | `app` |
 | `aws_account_id` | The AWS account ID | Yes | - |
 | `aws_region` | The AWS region | Yes | - |
-| `ecs_cluster` | The name of the ECS cluster | Yes | - |
+| `ecs_cluster` | The name of the ECS cluster. Required for every type except `batch_job_definition`, where it is optional | Yes* | - |
 | `aws_role` | The AWS IAM role to assume | No | `github_services` |
 | `dry_run` | Whether to perform a dry run | No | `false` |
 | `ecr_registry` | Use ECR registry for main container image | No | `true` |
 | `propagate_tags` | Where the service copies tags from when launching tasks (service mode only): `SERVICE` or `NONE` | No | `SERVICE` |
+
+\* Not required for `deployment_type: batch_job_definition`.
+
+## Outputs
+
+| Output | Description |
+|---|---|
+| `job_definition_arn` | `batch_job_definition` only: ARN of the registered job definition revision (empty on `dry_run`) |
 
 ## Example Usage
 
@@ -161,6 +180,28 @@ jobs:
           aws_region: us-east-1
 ```
 
+### Register an AWS Batch Job Definition
+
+```yaml
+      - name: Register Batch job definition
+        id: batch
+        uses: delivops/ecs-deploy-action@v1
+        with:
+          environment: production
+          deployment_type: batch_job_definition
+          task_name: nightly-report
+          ecs_cluster: production   # optional: SSM role fallback + /ecs/<cluster>/<task_name> logs
+          image_name: nightly-report
+          tag: ${{ github.sha }}
+          task_config_yaml: config/batch.yaml
+          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: us-east-1
+```
+
+In the YAML, `cpu` is in **vCPUs** for this type. See [docs/batch.md](docs/batch.md) for the key
+mapping, Batch-only keys (`platform`, `timeout_seconds`, `retry_attempts`, `parameters`,
+`propagate_tags`, `deregister_previous`) and the IAM permissions.
+
 ## Template Mode
 
 With `task_definition_source: template`, the task definition comes from the service's Terraform-managed template
@@ -225,6 +266,8 @@ Both roles are mandatory. If a slot cannot be resolved from any of the three sou
   This is only needed for the SSM fallback — specifying roles in YAML requires no new permission.
 - `scheduled_task` and `triggerable_task` deployments are not managed by the ECS service module,
   so no SSM parameter exists for them. **Set the role ARNs in YAML for those.**
+- `batch_job_definition` maps them to `jobRoleArn` / `executionRoleArn` and uses the SSM fallback
+  only when `ecs_cluster` is set — see [docs/batch.md](./docs/batch.md#roles).
 
 See [docs/roles.md](./docs/roles.md) for the full details.
 
@@ -321,6 +364,11 @@ For scheduled tasks, the action:
 For triggerable tasks, the action:
 1. Generates an ECS task definition from your YAML config
 2. Registers the new task definition with ECS
+
+For Batch job definitions, the action:
+1. Generates a job definition from your YAML config
+2. Registers it as a new revision with `aws batch register-job-definition`
+3. Deregisters older ACTIVE revisions, only if `deregister_previous: true`
 
 All infrastructure (EventBridge rules, schedules, network configuration, IAM roles) remains managed in your Terraform code, ensuring clear separation of concerns between infrastructure and application deployments.
 

@@ -1,0 +1,54 @@
+{
+  "jobDefinitionName": "nightly-report",
+  "type": "container",
+  "platformCapabilities": [
+    "FARGATE"
+  ],
+  "containerProperties": {
+    "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-app:latest",
+    "resourceRequirements": [
+      {
+        "type": "VCPU",
+        "value": "0.5"
+      },
+      {
+        "type": "MEMORY",
+        "value": "2048"
+      }
+    ],
+    "command": [
+      "node",
+      "dist/report.js"
+    ],
+    "environment": [
+      {
+        "name": "APP_ENV",
+        "value": "production"
+      }
+    ],
+    "secrets": [
+      {
+        "name": "DATABASE_URL",
+        "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:app-secrets-abc123:DATABASE_URL::"
+      }
+    ],
+    "jobRoleArn": "arn:aws:iam::123456789012:role/app",
+    "executionRoleArn": "arn:aws:iam::123456789012:role/app",
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/ecs/test-cluster/nightly-report",
+        "awslogs-region": "us-east-1",
+        "awslogs-stream-prefix": "batch"
+      }
+    },
+    "runtimePlatform": {
+      "operatingSystemFamily": "LINUX",
+      "cpuArchitecture": "ARM64"
+    }
+  },
+  "retryStrategy": {
+    "attempts": 1
+  },
+  "propagateTags": false
+}

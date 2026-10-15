@@ -6,14 +6,14 @@ inputs:
     description: 'The environment to deploy to'
     required: true
   deployment_type:
-    description: 'Deployment type: service, scheduled_task, or triggerable_task'
+    description: 'Deployment type: service, scheduled_task, triggerable_task, or batch_job_definition (registers an AWS Batch job definition revision)'
     default: 'service'
     required: false
   ecs_service:
     description: 'The name of the ECS service (required when deployment_type=service)' 
     required: false
   task_name:
-    description: 'The name of the task (required when deployment_type=scheduled_task or triggerable_task)'
+    description: 'The name of the task (required when deployment_type=scheduled_task or triggerable_task); the job definition name for batch_job_definition'
     required: false
   image_name:
     description: 'The name of the Docker image'
@@ -39,8 +39,8 @@ inputs:
     description: 'The AWS region'
     required: true
   ecs_cluster:
-    description: 'The name of the ECS cluster'
-    required: true
+    description: 'The name of the ECS cluster. Required for service, scheduled_task and triggerable_task. Optional for batch_job_definition, where it enables the SSM role fallback and the /ecs/<cluster>/<task_name> log group'
+    required: false
   aws_role:
     description: 'The AWS IAM role to assume'
     default: 'github_services'
@@ -57,6 +57,11 @@ inputs:
     description: 'The ECR registry URL'
     required: false
     default: 'true'
+
+outputs:
+  job_definition_arn:
+    description: 'batch_job_definition only: ARN of the registered job definition revision (empty on dry_run)'
+    value: ${{ steps.register-job-def.outputs.job_definition_arn }}
 
 runs:
   using: "composite"
@@ -79,6 +84,28 @@ runs:
         fi
         if [ "$DEPLOYMENT_TYPE" != "service" ]; then
           echo "::error::task_definition_source=template supports deployment_type=service only, got '$DEPLOYMENT_TYPE'"
+          exit 1
+        fi
+      shell: bash
+
+    # batch_job_definition only, so the other types run no new step.
+    - id: validate-batch-inputs
+      if: ${{ inputs.deployment_type == 'batch_job_definition' }}
+      env:
+        SOURCE: ${{ inputs.task_definition_source }}
+        TASK_CONFIG_YAML: ${{ inputs.task_config_yaml }}
+        TASK_NAME: ${{ inputs.task_name }}
+      run: |
+        if [ "$SOURCE" != "yaml" ]; then
+          echo "::error::deployment_type=batch_job_definition supports task_definition_source=yaml only, got '$SOURCE'"
+          exit 1
+        fi
+        if [ -z "$TASK_CONFIG_YAML" ]; then
+          echo "::error::task_config_yaml is required for deployment_type=batch_job_definition"
+          exit 1
+        fi
+        if [ -z "$TASK_NAME" ]; then
+          echo "::error::task_name (the job definition name) is required for deployment_type=batch_job_definition"
           exit 1
         fi
       shell: bash
@@ -110,7 +137,7 @@ runs:
 
     - id: determine-name
       run: |
-        if [ "${{ inputs.deployment_type }}" == "scheduled_task" ] || [ "${{ inputs.deployment_type }}" == "triggerable_task" ]; then
+        if [ "${{ inputs.deployment_type }}" == "scheduled_task" ] || [ "${{ inputs.deployment_type }}" == "triggerable_task" ] || [ "${{ inputs.deployment_type }}" == "batch_job_definition" ]; then
           echo "name=${{ inputs.task_name }}" >> $GITHUB_OUTPUT
         else
           echo "name=${{ inputs.ecs_service }}" >> $GITHUB_OUTPUT
@@ -118,7 +145,7 @@ runs:
       shell: bash
 
     - id: generate-task-def
-      if: ${{ inputs.task_definition_source == 'yaml' }}
+      if: ${{ inputs.task_definition_source == 'yaml' && inputs.deployment_type != 'batch_job_definition' }}
       run: |
         python3 ${{ github.action_path }}/scripts/generate_task_def.py \
           "${{ inputs.task_config_yaml }}" \
@@ -129,6 +156,22 @@ runs:
           "${{ inputs.image_name }}" \
           "${{ inputs.tag }}" \
           "${{ steps.determine-name.outputs.name }}"
+      shell: bash
+
+    - id: generate-job-def
+      if: ${{ inputs.deployment_type == 'batch_job_definition' }}
+      env:
+        TASK_CONFIG_YAML: ${{ inputs.task_config_yaml }}
+        JOB_NAME: ${{ inputs.task_name }}
+        REGION: ${{ inputs.aws_region }}
+        CONTAINER_REGISTRY: ${{ steps.define-registry.outputs.container_registry }}
+        IMAGE_NAME: ${{ inputs.image_name }}
+        TAG: ${{ inputs.tag }}
+        CLUSTER: ${{ inputs.ecs_cluster }}
+      run: |
+        python3 ${{ github.action_path }}/scripts/generate_job_def.py \
+          "$TASK_CONFIG_YAML" "$JOB_NAME" "$REGION" "$CONTAINER_REGISTRY" "$IMAGE_NAME" "$TAG" \
+          --cluster "$CLUSTER"
       shell: bash
 
     - id: template-task-def
@@ -214,4 +257,33 @@ runs:
           --targets "$UPDATED_TARGETS"
         
         echo "✅ Updated EventBridge rule $EVENT_RULE_NAME to task definition ${{ steps.register-task-def.outputs.task_definition_arn }}"
+      shell: bash
+
+    # AWS Batch job definition
+    - id: register-job-def
+      if: ${{ inputs.deployment_type == 'batch_job_definition' && inputs.dry_run == 'false' }}
+      env:
+        JOB_NAME: ${{ inputs.task_name }}
+        DEREGISTER_PREVIOUS: ${{ steps.generate-job-def.outputs.deregister_previous }}
+      run: |
+        JOB_DEF_ARN=$(aws batch register-job-definition \
+          --cli-input-json file://job-definition.json \
+          --query 'jobDefinitionArn' \
+          --output text)
+        echo "job_definition_arn=$JOB_DEF_ARN" >> "$GITHUB_OUTPUT"
+        echo "New job definition: $JOB_DEF_ARN"
+
+        # Off by default: a running or queued job keeps the revision it was
+        # submitted with, and deregistering it does not stop the job either way.
+        if [ "$DEREGISTER_PREVIOUS" == "true" ]; then
+          PREVIOUS=$(aws batch describe-job-definitions \
+            --job-definition-name "$JOB_NAME" \
+            --status ACTIVE \
+            --query "jobDefinitions[?jobDefinitionArn!='$JOB_DEF_ARN'].jobDefinitionArn" \
+            --output text)
+          for ARN in $PREVIOUS; do
+            aws batch deregister-job-definition --job-definition "$ARN"
+            echo "Deregistered previous revision: $ARN"
+          done
+        fi
       shell: bash
