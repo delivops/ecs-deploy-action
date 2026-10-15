@@ -6,7 +6,7 @@ import os
 import re
 import sys
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Callable, Dict, List, Optional, Any
 from pathlib import Path
 from enum import Enum
 
@@ -34,6 +34,11 @@ ROLE_ARN_KEYS = ('role_arn', 'task_role_arn', 'execution_role_arn')
 
 # arn:<partition>:iam::<12-digit account>:role/<path and name, no whitespace>
 ROLE_ARN_PATTERN = re.compile(r'^arn:aws[a-z0-9-]*:iam::\d{12}:role/\S+$')
+
+# arn:<partition>:ssm:<region>:<12-digit account>:parameter/<path>. ECS and
+# Batch both take such an ARN as a secret's valueFrom verbatim - there is no
+# JSON-key suffix to add, unlike a Secrets Manager secret.
+SSM_PARAMETER_ARN_PATTERN = re.compile(r'^arn:aws[a-z0-9-]*:ssm:[a-z0-9-]+:\d{12}:parameter/\S+$')
 
 def setup_logging(level: str = "INFO") -> logging.Logger:
     """Setup logging configuration"""
@@ -733,8 +738,15 @@ def expand_envs_from_files(config: Dict[str, Any], yaml_path: Path,
         f"envs_from_files in {label}"
     )
 
-def load_and_validate_config(yaml_file_path: str, service_name: Optional[str] = None) -> Dict[str, Any]:
-    """Load and validate YAML configuration, applying service overrides if present"""
+def load_and_validate_config(yaml_file_path: str, service_name: Optional[str] = None,
+                             validator: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict[str, Any]:
+    """Load and validate YAML configuration, applying service overrides if present
+
+    `validator` replaces validate_config for a non-ECS rendering of the same
+    YAML (batch_job_definition). Sidecars are an ECS task concept, so they are
+    neither validated nor expanded on that path - the caller ignores them.
+    """
+    ecs_task = validator is None
     try:
         yaml_path = Path(yaml_file_path)
         if not yaml_path.exists():
@@ -754,7 +766,8 @@ def load_and_validate_config(yaml_file_path: str, service_name: Optional[str] = 
 
         # Shape-check sidecars before anything iterates them, so `sidecars: oops`
         # fails with a real message instead of an AttributeError below.
-        validate_sidecars(config)
+        if ecs_task:
+            validate_sidecars(config)
 
         # Expand envs_from_files into the envs list (after merge so per-service
         # entries are appended; before validation so the final envs list is what
@@ -764,11 +777,11 @@ def load_and_validate_config(yaml_file_path: str, service_name: Optional[str] = 
         # Only the sidecars that will actually be rendered: a switched-off base
         # sidecar must not fail every deploy because its dotenv file was deleted
         # along with it.
-        for sidecar in enabled_sidecars(config):
+        for sidecar in enabled_sidecars(config) if ecs_task else []:
             expand_envs_from_files(sidecar, yaml_path, label=f"sidecar '{sidecar.get('name')}'")
 
         # Validate the final merged config
-        validate_config(config)
+        (validator or validate_config)(config)
         logger.info(f"Successfully loaded and validated configuration from {yaml_file_path}")
         if service_name and raw_config.get('services_overrides', {}).get(service_name):
             logger.info(f"Applied overrides for service: {service_name}")
@@ -998,9 +1011,13 @@ class RoleResolver:
             self.logger.info(f"{td_key} resolved from SSM parameter {name}")
 
         if missing:
-            raise RoleResolutionError(self._unresolved_message(missing))
+            self._on_unresolved(missing)
 
         return resolved
+
+    def _on_unresolved(self, missing: List[tuple]) -> None:
+        """Both ECS slots are mandatory, so anything SSM did not return is fatal."""
+        raise RoleResolutionError(self._unresolved_message(missing))
 
     def _client_error(self, error, names: List[str]) -> RoleResolutionError:
         """Translate a botocore ClientError into an actionable message."""
@@ -1011,8 +1028,8 @@ class RoleResolver:
             return RoleResolutionError(
                 f"Access denied reading role ARNs from SSM ({joined}). The deploy "
                 f"role needs ssm:GetParameters (plural) on "
-                f"arn:aws:ssm:{self.aws_region}:<account-id>:parameter/ecs/"
-                f"{self.cluster_name}/{self.service_name}/*. Alternatively set "
+                f"arn:aws:ssm:{self.aws_region}:<account-id>:parameter"
+                f"{self._ssm_name('*')}. Alternatively set "
                 f"task_role_arn / execution_role_arn (or role_arn) in the YAML."
             )
         if code in ('ThrottlingException', 'TooManyUpdates', 'RequestLimitExceeded'):
@@ -1167,9 +1184,14 @@ class SecretManager:
         if secret_list:
             for secret_dict in secret_list:
                 for key, base_arn in secret_dict.items():
+                    if SSM_PARAMETER_ARN_PATTERN.match(str(base_arn)):
+                        # The parameter holds the value itself: pass the ARN through.
+                        value_from = base_arn
+                    else:
+                        value_from = f"{base_arn}:{key}::"
                     secrets.append({
                         "name": key,
-                        "valueFrom": f"{base_arn}:{key}::"
+                        "valueFrom": value_from
                     })
             logger.info(f"Built {len(secrets)} secret configurations (legacy format)")
             return secrets

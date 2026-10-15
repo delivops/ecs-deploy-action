@@ -1,0 +1,29 @@
+# AWS Batch job definition on EC2 compute (the default platform).
+# Deployed with deployment_type: batch_job_definition; task_name is the job
+# definition name. cpu is in ECS CPU units as everywhere else (2048 = 2 vCPUs);
+# on EC2 it must be a whole number of vCPUs (a multiple of 1024).
+cpu: 2048
+memory: 4096
+
+command: ["python", "-m", "worker", "--date", "Ref::date"]
+
+envs:
+  - LOG_LEVEL: info
+  - BATCH_SIZE: 500
+
+secrets:
+  # Secrets Manager: the env var name is also the JSON key in the secret
+  - DB_PASSWORD: arn:aws:secretsmanager:us-east-1:123456789012:secret:worker-db
+  # SSM Parameter Store: the ARN is passed through as-is
+  - API_TOKEN: arn:aws:ssm:us-east-1:123456789012:parameter/worker/api-token
+
+task_role_arn: arn:aws:iam::123456789012:role/worker-job
+execution_role_arn: arn:aws:iam::123456789012:role/worker-execution
+
+# Default /batch/batch-ec2; must exist (create it in Terraform)
+log_group: /batch/workers/batch-ec2
+
+timeout_seconds: 3600
+retry_attempts: 3
+parameters:
+  date: "today"

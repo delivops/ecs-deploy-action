@@ -2,7 +2,7 @@
 
 You can inject secrets from AWS Secrets Manager as environment variables or download secret files at runtime. Supported formats:
 
-- `secrets`: Classic format, map env var to secret ARN
+- `secrets`: Classic format, map env var to a Secrets Manager secret ARN or an SSM parameter ARN
 - `secrets_envs`: Grouped format, reference multiple keys from one secret
 - `secrets_envs` (name-only): Auto-extract all keys from a secret as environment variables
 - `secret_files`: List of secret files to download to `/etc/secrets/`
@@ -20,6 +20,32 @@ secrets:
   - DATABASE_PASSWORD: arn:aws:secretsmanager:us-east-1:123456789012:secret:prod-db-password
   - API_KEY: arn:aws:secretsmanager:us-east-1:123456789012:secret:external-api-key
 ```
+
+## SSM Parameter Store
+
+A `secrets` entry whose value is an SSM parameter ARN is passed through unchanged as `valueFrom`
+(the parameter holds the value itself, so there is no JSON key to append). ECS task definitions
+and AWS Batch job definitions both accept it, and it can be mixed with Secrets Manager entries:
+
+```yaml
+secrets:
+  - DATABASE_PASSWORD: arn:aws:secretsmanager:us-east-1:123456789012:secret:prod-db-password
+  - API_TOKEN: arn:aws:ssm:us-east-1:123456789012:parameter/my-app/api-token
+```
+
+renders as
+
+```json
+"secrets": [
+  {"name": "DATABASE_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:prod-db-password:DATABASE_PASSWORD::"},
+  {"name": "API_TOKEN", "valueFrom": "arn:aws:ssm:us-east-1:123456789012:parameter/my-app/api-token"}
+]
+```
+
+Use the full ARN (`arn:aws:ssm:<region>:<account-id>:parameter/<path>`); a `SecureString` works
+the same way. The execution role needs `ssm:GetParameters` on the parameter, and `kms:Decrypt` if
+it is encrypted with a customer-managed key. See
+[examples/secrets-ssm-parameter.yaml](../examples/secrets-ssm-parameter.yaml).
 
 ## Grouped Format
 

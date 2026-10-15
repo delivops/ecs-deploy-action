@@ -1,0 +1,67 @@
+{
+  "jobDefinitionName": "batch-ec2",
+  "type": "container",
+  "platformCapabilities": [
+    "EC2"
+  ],
+  "containerProperties": {
+    "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/test-app:latest",
+    "resourceRequirements": [
+      {
+        "type": "VCPU",
+        "value": "2"
+      },
+      {
+        "type": "MEMORY",
+        "value": "4096"
+      }
+    ],
+    "command": [
+      "python",
+      "-m",
+      "worker",
+      "--date",
+      "Ref::date"
+    ],
+    "environment": [
+      {
+        "name": "LOG_LEVEL",
+        "value": "info"
+      },
+      {
+        "name": "BATCH_SIZE",
+        "value": "500"
+      }
+    ],
+    "secrets": [
+      {
+        "name": "DB_PASSWORD",
+        "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:worker-db:DB_PASSWORD::"
+      },
+      {
+        "name": "API_TOKEN",
+        "valueFrom": "arn:aws:ssm:us-east-1:123456789012:parameter/worker/api-token"
+      }
+    ],
+    "jobRoleArn": "arn:aws:iam::123456789012:role/worker-job",
+    "executionRoleArn": "arn:aws:iam::123456789012:role/worker-execution",
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/batch/workers/batch-ec2",
+        "awslogs-region": "us-east-1",
+        "awslogs-stream-prefix": "batch"
+      }
+    }
+  },
+  "retryStrategy": {
+    "attempts": 3
+  },
+  "propagateTags": true,
+  "parameters": {
+    "date": "today"
+  },
+  "timeout": {
+    "attemptDurationSeconds": 3600
+  }
+}

@@ -1,0 +1,26 @@
+# AWS Batch job definition on Fargate, sharing a YAML with an ECS service.
+# cpu means the same for both (CPU units): 512 is 0.5 vCPU for the job.
+# Roles are not in the YAML: the job reads /batch/nightly-report/job-role and
+# /batch/nightly-report/execution-role from SSM; logs go to /batch/nightly-report.
+cpu: 512
+memory: 1024
+port: 8080
+health_check:
+  command: "curl -f http://localhost:8080/health || exit 1"
+
+envs:
+  - APP_ENV: production
+
+secrets_envs:
+  - id: arn:aws:secretsmanager:us-east-1:123456789012:secret:app-secrets-abc123
+    values:
+      - DATABASE_URL
+
+services_overrides:
+  nightly-report:
+    platform: FARGATE
+    memory: 2048
+    cpu_arch: ARM64
+    command: ["node", "dist/report.js"]
+    propagate_tags: false
+    deregister_previous: true

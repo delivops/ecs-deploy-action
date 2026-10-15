@@ -32,6 +32,9 @@ jobs:
     - name: Run template mode tests
       run: python tests/test_template.py
 
+    - name: Run batch job definition tests
+      run: python tests/test_batch.py
+
     - name: Run task definition tests
       # Deliberately without UPDATE_EXPECTED, so a missing expected output fails
       # the build instead of being fabricated here and auto-committed - which
@@ -69,3 +72,4 @@ jobs:
         python tests/test_roles.py
         python tests/test_sidecars.py
         python tests/test_template.py
+        python tests/test_batch.py
