@@ -360,7 +360,8 @@ def test_action_generate_step_unchanged():
 
 def test_action_new_steps_gated():
     ok = (STEPS["validate-inputs"]["if"] == "${{ inputs.task_definition_source != 'yaml' }}"
-          and STEPS["template-task-def"]["if"] == "${{ inputs.task_definition_source == 'template' }}"
+          and STEPS["template-task-def"]["if"] == (
+              "${{ inputs.task_definition_source == 'template' && inputs.deployment_type == 'service' }}")
           and "${{" not in STEPS["validate-inputs"]["run"] and "${{ inputs" not in STEPS["template-task-def"]["run"])
     return ok, "new steps gated, inputs passed through env"
 

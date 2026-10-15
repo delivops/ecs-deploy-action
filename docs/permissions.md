@@ -44,7 +44,8 @@ permission.
   EventBridge role).
 - `dry_run: true` skips every registration and update, so it needs only `ecr:GetAuthorizationToken`
   and the YAML-dependent reads below.
-- [Template mode](template.md#iam) (`task_definition_source: template`) has its own list.
+- [Template mode](template.md#iam) (`task_definition_source: template`) has its own list, for
+  [`service`](template.md#iam) and for [`batch_job_definition`](template.md#iam-1).
 
 ### Depending on the YAML
 

@@ -52,8 +52,9 @@ Register a new revision of an AWS Batch job definition (`type: container`) from 
 | `image_name` | The name of the Docker image | Yes | - |
 | `tag` | The tag of the Docker image | Yes | - |
 | `task_config_yaml` | Path to the YAML file containing task configuration (required when `task_definition_source=yaml`) | No | - |
-| `task_definition_source` | `yaml` (from `task_config_yaml`) or `template` (copy the service's Terraform-managed template, see [Template Mode](docs/template.md)) | No | `yaml` |
-| `container_name` | Template mode only: the container whose image is replaced | No | `app` |
+| `task_definition_source` | `yaml` (from `task_config_yaml`) or `template` (copy a Terraform-managed template task or job definition, see [Template Mode](docs/template.md)) | No | `yaml` |
+| `container_name` | Template mode, `service` only: the container whose image is replaced | No | `app` |
+| `deregister_previous` | Template mode, `batch_job_definition` only: deregister older ACTIVE revisions after registering (YAML mode sets it in the YAML) | No | `false` |
 | `aws_account_id` | The AWS account ID | Yes | - |
 | `aws_region` | The AWS region | Yes | - |
 | `ecs_cluster` | The name of the ECS cluster. Required for every type except `batch_job_definition`, which doesn't use it | Yes* | - |
@@ -212,8 +213,10 @@ the IAM permissions.
 With `task_definition_source: template`, the task definition comes from the service's Terraform-managed template
 ([`terraform-aws-ecs-service`](https://github.com/delivops/terraform-aws-ecs-service) >= 3.2.0,
 `task_definition_template`) instead of a YAML file: the action copies the template's latest revision into the
-service's family, replaces one container's image, and deploys it. See [docs/template.md](docs/template.md) for
-the SSM contract, desired count and IAM.
+service's family, replaces one container's image, and deploys it. With `deployment_type: batch_job_definition`,
+the action copies a Terraform-managed template job definition (named in SSM `/batch/<task_name>/job-definition-template`)
+into `task_name` with the new image. See [docs/template.md](docs/template.md) for the SSM contract, desired count
+and IAM.
 
 ## Task Configuration
 
@@ -371,7 +374,7 @@ For triggerable tasks, the action:
 2. Registers the new task definition with ECS
 
 For Batch job definitions, the action:
-1. Generates a job definition from your YAML config
+1. Generates a job definition from your YAML config, or copies the template job definition in template mode
 2. Registers it as a new revision with `aws batch register-job-definition`
 3. Deregisters older ACTIVE revisions, only if `deregister_previous: true`
 

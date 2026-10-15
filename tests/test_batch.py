@@ -552,7 +552,8 @@ BATCH_IF = "${{ inputs.deployment_type == 'batch_job_definition' }}"
 
 def test_action_batch_steps_gated():
     ok = (STEPS["validate-batch-inputs"]["if"] == BATCH_IF
-          and STEPS["generate-job-def"]["if"] == BATCH_IF
+          and STEPS["generate-job-def"]["if"] == (
+              "${{ inputs.task_definition_source == 'yaml' && inputs.deployment_type == 'batch_job_definition' }}")
           and STEPS["register-job-def"]["if"] == (
               "${{ inputs.deployment_type == 'batch_job_definition' && inputs.dry_run == 'false' }}")
           and "${{ inputs" not in STEPS["generate-job-def"]["run"]
