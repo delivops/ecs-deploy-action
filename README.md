@@ -13,7 +13,7 @@ This GitHub Action automates the deployment of containerized applications to Ama
 - Configurable deployment parameters
 - Support for OpenTelemetry and Fluent Bit sidecars
 - **Generic sidecar containers** with per-container read-only root filesystems and strict isolation
-- Secrets management integration
+- Secrets management integration (Secrets Manager JSON keys or whole secrets, SSM parameters — see [docs/secrets.md](docs/secrets.md))
 - Integration with GitHub Actions workflow
 - **EC2 and Fargate launch type support**
 - **Linux parameters configuration** (init process, capabilities, shared memory, devices)
@@ -63,6 +63,11 @@ Register a new revision of an AWS Batch job definition (`type: container`) from 
 | `propagate_tags` | Where the service copies tags from when launching tasks (service mode only): `SERVICE` or `NONE` | No | `SERVICE` |
 
 \* Not required for `deployment_type: batch_job_definition`.
+
+## Permissions
+
+The minimum IAM permissions for the deploy role (per deployment type), the execution role and the
+task role are in [docs/permissions.md](docs/permissions.md).
 
 ## Outputs
 

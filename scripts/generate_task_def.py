@@ -20,6 +20,14 @@ class ValidationError(Exception):
     """Custom exception for validation errors"""
     pass
 
+class SecretResolutionError(ValidationError):
+    """A `secrets_envs` entry with `name` + `env` names a secret that cannot be
+    resolved to its ARN (missing, access denied, no credentials).
+
+    A ValidationError subclass so both generators' error handling covers it.
+    """
+    pass
+
 class RoleResolutionError(Exception):
     """Raised when taskRoleArn / executionRoleArn cannot be resolved.
 
@@ -39,6 +47,9 @@ ROLE_ARN_PATTERN = re.compile(r'^arn:aws[a-z0-9-]*:iam::\d{12}:role/\S+$')
 # Batch both take such an ARN as a secret's valueFrom verbatim - there is no
 # JSON-key suffix to add, unlike a Secrets Manager secret.
 SSM_PARAMETER_ARN_PATTERN = re.compile(r'^arn:aws[a-z0-9-]*:ssm:[a-z0-9-]+:\d{12}:parameter/\S+$')
+
+# Environment variable names a `secrets_envs` `env:` entry may set.
+ENV_VAR_NAME_PATTERN = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
 def setup_logging(level: str = "INFO") -> logging.Logger:
     """Setup logging configuration"""
@@ -1175,6 +1186,83 @@ class SecretManager:
         return f"arn:aws:secretsmanager:us-east-1:123456789012:secret:{secret_name}-xyz789"
     
     @staticmethod
+    def resolve_secret_arn(secret_name: str) -> str:
+        """Full ARN of a secret, from DescribeSecret (metadata only - never the value).
+
+        Unlike discover_secret_keys there is no mock fallback: an unresolvable
+        name fails the deploy rather than registering a reference that cannot
+        start a task.
+        """
+        try:
+            import boto3
+            from botocore.exceptions import BotoCoreError, ClientError
+        except ImportError as e:
+            raise SecretResolutionError(
+                f"boto3 is required to resolve secret '{secret_name}' ({e}). Use the "
+                f"secret's full ARN as 'id' instead of 'name'."
+            ) from e
+
+        try:
+            response = boto3.Session().client('secretsmanager').describe_secret(SecretId=secret_name)
+        except ClientError as e:
+            code = e.response.get('Error', {}).get('Code', 'Unknown')
+            if code == 'ResourceNotFoundException':
+                reason = "it does not exist in this account and region"
+            elif code in ('AccessDeniedException', 'AccessDenied'):
+                reason = "the deploy role lacks secretsmanager:DescribeSecret on it"
+            else:
+                reason = f"AWS error {code}: {e}"
+            raise SecretResolutionError(
+                f"Cannot resolve secret '{secret_name}' to its ARN: {reason}. Fix it, "
+                f"or use the secret's full ARN as 'id' instead of 'name'."
+            ) from e
+        except BotoCoreError as e:
+            raise SecretResolutionError(
+                f"Cannot resolve secret '{secret_name}' to its ARN: {type(e).__name__}: {e}"
+            ) from e
+
+        arn = response['ARN']
+        logger.info(f"Resolved secret '{secret_name}' to {arn}")
+        return arn
+
+    @staticmethod
+    def build_whole_secret(secret_config: Dict[str, Any], taken: Dict[str, str]) -> Dict[str, str]:
+        """One `secrets_envs` entry with `env:` - the whole secret as one variable.
+
+        The reference is the secret's ARN with no JSON-key suffix, which is what
+        makes ECS and Batch inject the entire secret string. `id` is used as
+        given; `name` is resolved to the full ARN. `taken` maps each variable
+        name already set to where it came from, for the duplicate check.
+        """
+        env_name = secret_config.get('env')
+        secret_id = secret_config.get('id')
+        secret_name = secret_config.get('name')
+
+        if not isinstance(env_name, str) or not ENV_VAR_NAME_PATTERN.match(env_name):
+            raise ValidationError(
+                f"secrets_envs: env must be an environment variable name (letters, digits "
+                f"and '_', not starting with a digit), got {env_name!r}"
+            )
+        label = f"secrets_envs entry for env '{env_name}'"
+        if secret_config.get('values'):
+            raise ValidationError(
+                f"{label}: use either 'env' (the whole secret as one variable) or "
+                f"'values' (one variable per JSON key), not both"
+            )
+        if bool(secret_id) == bool(secret_name):
+            raise ValidationError(f"{label}: set exactly one of 'id' (the secret ARN) or 'name'")
+        for key, value in (('id', secret_id), ('name', secret_name)):
+            if value is not None and not isinstance(value, str):
+                raise ValidationError(f"{label}: '{key}' must be a string, got {value!r}")
+        if env_name in taken:
+            raise ValidationError(
+                f"{label}: variable '{env_name}' is already set by {taken[env_name]}"
+            )
+
+        value_from = secret_id or SecretManager.resolve_secret_arn(secret_name)
+        return {"name": env_name, "valueFrom": value_from}
+
+    @staticmethod
     def build_secrets_from_config(config: Dict[str, Any]) -> List[Dict[str, str]]:
         """Build secrets configuration from YAML config"""
         secrets = []
@@ -1182,6 +1270,14 @@ class SecretManager:
         # Legacy format support
         secret_list = config.get('secrets') or []
         if secret_list:
+            # secrets_envs is ignored whenever `secrets` is set (long-standing).
+            # An `env:` entry is new, so fail rather than drop it silently.
+            if any(isinstance(e, dict) and 'env' in e for e in config.get('secrets_envs') or []):
+                raise ValidationError(
+                    "secrets_envs entries with 'env' are ignored when 'secrets' is also "
+                    "set. Move the 'secrets' entries into secrets_envs, or this secret "
+                    "into 'secrets'."
+                )
             for secret_dict in secret_list:
                 for key, base_arn in secret_dict.items():
                     if SSM_PARAMETER_ARN_PATTERN.match(str(base_arn)):
@@ -1199,7 +1295,21 @@ class SecretManager:
         # New format
         secrets_envs = config.get('secrets_envs') or []
         
+        # Variable names already taken, for the `env:` duplicate check. Only
+        # an `env:` entry is checked, so existing configs cannot start failing.
+        taken = {k: "envs" for e in config.get('envs') or [] if isinstance(e, dict) for k in e}
+        whole_secret_names = []
+
         for secret_config in secrets_envs:
+            # Whole secret as one variable. Checked before the name-only branch,
+            # which would otherwise treat `name` + `env` as key discovery.
+            if isinstance(secret_config, dict) and 'env' in secret_config:
+                entry = SecretManager.build_whole_secret(secret_config, taken)
+                secrets.append(entry)
+                taken[entry["name"]] = "another secrets_envs entry"
+                whole_secret_names.append(entry["name"])
+                continue
+
             secret_id = secret_config.get('id', '')
             secret_name = secret_config.get('name', '')
             secret_values = secret_config.get('values', [])
@@ -1234,6 +1344,14 @@ class SecretManager:
                     "valueFrom": f"{secret_id}:{key}::"
                 })
         
+        # A JSON-key variable listed after an `env:` entry can collide with it too.
+        for env_name in whole_secret_names:
+            if sum(1 for s in secrets if s["name"] == env_name) > 1:
+                raise ValidationError(
+                    f"secrets_envs entry for env '{env_name}': variable '{env_name}' is "
+                    f"also set by another secrets_envs entry"
+                )
+
         logger.info(f"Built {len(secrets)} secret configurations (new format)")
         return secrets
 
