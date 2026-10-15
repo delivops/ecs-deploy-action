@@ -58,6 +58,8 @@ secrets_envs:
       - API_KEY
 ```
 
+Which role needs which secret permission: [permissions.md](permissions.md).
+
 ## Whole Secret as One Variable (`env`)
 
 For a secret that holds a single value rather than JSON — an API key, a token, a licence string —

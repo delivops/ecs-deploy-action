@@ -64,6 +64,11 @@ Register a new revision of an AWS Batch job definition (`type: container`) from 
 
 \* Not required for `deployment_type: batch_job_definition`.
 
+## Permissions
+
+The minimum IAM permissions for the deploy role (per deployment type), the execution role and the
+task role are in [docs/permissions.md](docs/permissions.md).
+
 ## Outputs
 
 | Output | Description |

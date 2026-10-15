@@ -163,6 +163,8 @@ creates it, so it can't leave a group that keeps logs forever.
 
 ## IAM permissions
 
+All deployment types side by side, with example policies: [permissions.md](permissions.md).
+
 The deploy role (`aws_role`) needs:
 
 | Action | Resource | When |
