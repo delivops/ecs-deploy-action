@@ -4,7 +4,10 @@
 from the same `task_config_yaml` format the ECS deployment types use. The image is built from
 `image_name` + `tag` exactly as for ECS, and `task_name` is the job definition name.
 
-It is opt-in: nothing changes for `service`, `scheduled_task`, `triggerable_task` or template mode.
+It is opt-in: nothing changes for `service`, `scheduled_task`, `triggerable_task` or ECS template mode.
+
+Instead of a YAML, the job definition can also come from a Terraform-managed template job definition, with a
+deploy only swapping the image: see [Template mode](#template-mode) below.
 
 The action only registers the job definition. The compute environment, job queue, log group and
 IAM roles stay in Terraform, and whatever submits the jobs (a schedule, Step Functions, another
@@ -39,7 +42,9 @@ like ECS — so `task_name` is the job's whole identity: roles fall back to SSM
 | Input | For `batch_job_definition` |
 |---|---|
 | `task_name` | **Required.** The job definition name: up to 128 letters, digits, `-` and `_`. |
-| `task_config_yaml` | **Required.** Only `task_definition_source: yaml` is supported. |
+| `task_config_yaml` | **Required** with `task_definition_source: yaml` (the default); must be left out with `template`. |
+| `task_definition_source` | `yaml` (default) or `template` — see [Template mode](#template-mode). |
+| `deregister_previous` | Template mode only; in YAML mode it is a YAML key (below), and setting the input fails the deploy. |
 | `ecs_cluster` | Not used. |
 | `dry_run` | `true` writes and prints `job-definition.json` and registers nothing. |
 
@@ -160,6 +165,14 @@ Every job definition logs with `awslogs` to its own group: `/batch/<task_name>` 
 YAML `log_group` (which can differ per job under `services_overrides`). The stream prefix is
 `batch`. The group must exist — create it in Terraform with a retention period; the action never
 creates it, so it can't leave a group that keeps logs forever.
+
+## Template mode
+
+With `task_definition_source: template`, Terraform owns the whole job definition and a deploy only swaps the image.
+Terraform manages a complete *template* job definition under its own name, and the action copies its latest ACTIVE
+revision into `task_name` with the new image. Command, env, secrets, roles, resources, timeout, retry strategy,
+parameters and logging all come from the template; none of the YAML mapping above applies. See
+[docs/template.md](template.md#batch-job-definitions) for the steps, the SSM contract, usage and IAM.
 
 ## IAM permissions
 

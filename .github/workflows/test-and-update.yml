@@ -35,6 +35,9 @@ jobs:
     - name: Run batch job definition tests
       run: python tests/test_batch.py
 
+    - name: Run batch template mode tests
+      run: python tests/test_batch_template.py
+
     - name: Run whole-secret tests
       run: python tests/test_secrets.py
 
@@ -76,4 +79,5 @@ jobs:
         python tests/test_sidecars.py
         python tests/test_template.py
         python tests/test_batch.py
+        python tests/test_batch_template.py
         python tests/test_secrets.py

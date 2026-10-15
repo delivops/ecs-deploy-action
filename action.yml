@@ -25,12 +25,16 @@ inputs:
     description: 'Path to the YAML file containing task configuration (required when task_definition_source=yaml)'
     required: false
   task_definition_source:
-    description: 'Where the task definition comes from: yaml (task_config_yaml, the default) or template (the service''s Terraform-managed template family, published to SSM by terraform-aws-ecs-service >= 3.2.0 task_definition_template). Template mode supports deployment_type=service only.'
+    description: 'Where the task definition comes from: yaml (task_config_yaml, the default) or template (the service''s Terraform-managed template family, published to SSM by terraform-aws-ecs-service >= 3.2.0 task_definition_template). Template mode supports deployment_type=service and batch_job_definition (the template job definition named in SSM /batch/<task_name>/job-definition-template).'
     default: 'yaml'
     required: false
   container_name:
-    description: 'Template mode only: the container whose image this deploy replaces'
+    description: 'Template mode with deployment_type=service only: the container whose image this deploy replaces'
     default: 'app'
+    required: false
+  deregister_previous:
+    description: 'Template mode with deployment_type=batch_job_definition only: deregister older ACTIVE revisions after registering (in YAML mode set deregister_previous in the YAML)'
+    default: 'false'
     required: false
   aws_account_id:
     description: 'The AWS account ID'
@@ -82,8 +86,8 @@ runs:
           echo "::error::task_config_yaml is not used with task_definition_source=template; remove it (the task definition comes from the Terraform-managed template)"
           exit 1
         fi
-        if [ "$DEPLOYMENT_TYPE" != "service" ]; then
-          echo "::error::task_definition_source=template supports deployment_type=service only, got '$DEPLOYMENT_TYPE'"
+        if [ "$DEPLOYMENT_TYPE" != "service" ] && [ "$DEPLOYMENT_TYPE" != "batch_job_definition" ]; then
+          echo "::error::task_definition_source=template supports deployment_type=service or batch_job_definition only, got '$DEPLOYMENT_TYPE'"
           exit 1
         fi
       shell: bash
@@ -95,13 +99,20 @@ runs:
         SOURCE: ${{ inputs.task_definition_source }}
         TASK_CONFIG_YAML: ${{ inputs.task_config_yaml }}
         TASK_NAME: ${{ inputs.task_name }}
+        DEREGISTER_PREVIOUS: ${{ inputs.deregister_previous }}
       run: |
-        if [ "$SOURCE" != "yaml" ]; then
-          echo "::error::deployment_type=batch_job_definition supports task_definition_source=yaml only, got '$SOURCE'"
+        # validate-inputs has already rejected any source other than yaml/template,
+        # and task_config_yaml together with template.
+        if [ "$SOURCE" == "yaml" ] && [ -z "$TASK_CONFIG_YAML" ]; then
+          echo "::error::task_config_yaml is required for deployment_type=batch_job_definition"
           exit 1
         fi
-        if [ -z "$TASK_CONFIG_YAML" ]; then
-          echo "::error::task_config_yaml is required for deployment_type=batch_job_definition"
+        if [ "$SOURCE" == "yaml" ] && [ "$DEREGISTER_PREVIOUS" != "false" ]; then
+          echo "::error::the deregister_previous input is for task_definition_source=template; in YAML mode set deregister_previous in the YAML"
+          exit 1
+        fi
+        if [ "$DEREGISTER_PREVIOUS" != "true" ] && [ "$DEREGISTER_PREVIOUS" != "false" ]; then
+          echo "::error::deregister_previous must be 'true' or 'false', got '$DEREGISTER_PREVIOUS'"
           exit 1
         fi
         if [ -z "$TASK_NAME" ]; then
@@ -159,7 +170,7 @@ runs:
       shell: bash
 
     - id: generate-job-def
-      if: ${{ inputs.deployment_type == 'batch_job_definition' }}
+      if: ${{ inputs.task_definition_source == 'yaml' && inputs.deployment_type == 'batch_job_definition' }}
       env:
         TASK_CONFIG_YAML: ${{ inputs.task_config_yaml }}
         JOB_NAME: ${{ inputs.task_name }}
@@ -173,7 +184,7 @@ runs:
       shell: bash
 
     - id: template-task-def
-      if: ${{ inputs.task_definition_source == 'template' }}
+      if: ${{ inputs.task_definition_source == 'template' && inputs.deployment_type == 'service' }}
       env:
         CLUSTER: ${{ inputs.ecs_cluster }}
         REGION: ${{ inputs.aws_region }}
@@ -186,6 +197,21 @@ runs:
         python3 ${{ github.action_path }}/scripts/template_task_def.py \
           "$CLUSTER" "$REGION" "$CONTAINER_REGISTRY" "$IMAGE_NAME" "$TAG" "$SERVICE" \
           --container-name "$CONTAINER_NAME"
+      shell: bash
+
+    - id: template-job-def
+      if: ${{ inputs.task_definition_source == 'template' && inputs.deployment_type == 'batch_job_definition' }}
+      env:
+        REGION: ${{ inputs.aws_region }}
+        CONTAINER_REGISTRY: ${{ steps.define-registry.outputs.container_registry }}
+        IMAGE_NAME: ${{ inputs.image_name }}
+        TAG: ${{ inputs.tag }}
+        JOB_NAME: ${{ inputs.task_name }}
+        DEREGISTER_PREVIOUS: ${{ inputs.deregister_previous }}
+      run: |
+        python3 ${{ github.action_path }}/scripts/template_job_def.py \
+          "$REGION" "$CONTAINER_REGISTRY" "$IMAGE_NAME" "$TAG" "$JOB_NAME" \
+          --deregister-previous "$DEREGISTER_PREVIOUS"
       shell: bash
 
     # ECS Service Deployment
@@ -262,7 +288,8 @@ runs:
       if: ${{ inputs.deployment_type == 'batch_job_definition' && inputs.dry_run == 'false' }}
       env:
         JOB_NAME: ${{ inputs.task_name }}
-        DEREGISTER_PREVIOUS: ${{ steps.generate-job-def.outputs.deregister_previous }}
+        # Only one of the two steps runs; a skipped step's output is empty.
+        DEREGISTER_PREVIOUS: ${{ steps.generate-job-def.outputs.deregister_previous || steps.template-job-def.outputs.deregister_previous }}
       run: |
         JOB_DEF_ARN=$(aws batch register-job-definition \
           --cli-input-json file://job-definition.json \
