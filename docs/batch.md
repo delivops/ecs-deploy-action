@@ -55,7 +55,7 @@ Existing keys are reused where they mean the same thing:
 | `memory` | `resourceRequirements` `MEMORY` | MiB. Default `2048`. On Fargate it must be a valid combination with `cpu` (same table as ECS Fargate). |
 | `command` | `containerProperties.command` | Omitted when empty, so the image's `CMD` applies. |
 | `envs`, `envs_from_files` | `containerProperties.environment` | Same rules as ECS. |
-| `secrets`, `secrets_envs` (both formats) | `containerProperties.secrets` | All three formats, including SSM parameter ARNs — see [secrets.md](secrets.md). |
+| `secrets`, `secrets_envs` (all forms) | `containerProperties.secrets` | Including SSM parameter ARNs and whole secrets (`env`) — see [secrets.md](secrets.md). |
 | `task_role_arn` / `execution_role_arn` / `role_arn` | `jobRoleArn` / `executionRoleArn` | YAML first, then SSM `/batch/<task_name>/…` — see [Roles](#roles). |
 | `cpu_arch` | `runtimePlatform.cpuArchitecture` | Fargate only (`X86_64` default, or `ARM64`). On EC2 the compute environment decides. |
 | `ephemeral_storage` | `ephemeralStorage.sizeInGiB` | Fargate only, 21–200. |
@@ -173,6 +173,7 @@ The deploy role (`aws_role`) needs:
 | `iam:PassRole` | the job role and the execution role | whenever a role is set |
 | `ssm:GetParameters` | `arn:aws:ssm:<region>:<account>:parameter/batch/<task_name>/*` | whenever the YAML doesn't set both roles |
 | `secretsmanager:GetSecretValue` | the named secrets | `secrets_envs` name-only format (key discovery) |
+| `secretsmanager:DescribeSecret` | the named secrets | `secrets_envs` entries with `name` + `env` |
 
 The execution role needs, as for ECS: ECR pull, `logs:CreateLogStream` / `logs:PutLogEvents` on
 the log group, and `secretsmanager:GetSecretValue` / `ssm:GetParameters` (plus `kms:Decrypt` for

@@ -13,7 +13,7 @@ This GitHub Action automates the deployment of containerized applications to Ama
 - Configurable deployment parameters
 - Support for OpenTelemetry and Fluent Bit sidecars
 - **Generic sidecar containers** with per-container read-only root filesystems and strict isolation
-- Secrets management integration
+- Secrets management integration (Secrets Manager JSON keys or whole secrets, SSM parameters — see [docs/secrets.md](docs/secrets.md))
 - Integration with GitHub Actions workflow
 - **EC2 and Fargate launch type support**
 - **Linux parameters configuration** (init process, capabilities, shared memory, devices)

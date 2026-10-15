@@ -5,6 +5,7 @@ You can inject secrets from AWS Secrets Manager as environment variables or down
 - `secrets`: Classic format, map env var to a Secrets Manager secret ARN or an SSM parameter ARN
 - `secrets_envs`: Grouped format, reference multiple keys from one secret
 - `secrets_envs` (name-only): Auto-extract all keys from a secret as environment variables
+- `secrets_envs` with `env`: the whole secret as one environment variable (single-value secrets)
 - `secret_files`: List of secret files to download to `/etc/secrets/`
 
 See the [full YAML example](../README.md#complete-yaml-configuration-example) for usage.
@@ -56,6 +57,46 @@ secrets_envs:
       - DATABASE_PASSWORD
       - API_KEY
 ```
+
+## Whole Secret as One Variable (`env`)
+
+For a secret that holds a single value rather than JSON — an API key, a token, a licence string —
+give the `secrets_envs` entry an `env` instead of `values`:
+
+```yaml
+secrets_envs:
+  - id: arn:aws:secretsmanager:us-east-1:123456789012:secret:stripe-api-key-AbCdEf
+    env: STRIPE_API_KEY
+  - name: license-key            # resolved to the full ARN at deploy time
+    env: LICENSE_KEY
+```
+
+renders as
+
+```json
+"secrets": [
+  {"name": "STRIPE_API_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:stripe-api-key-AbCdEf"},
+  {"name": "LICENSE_KEY", "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:license-key-XyZ123"}
+]
+```
+
+The reference is the secret's ARN with no JSON-key suffix, so the container receives the entire
+secret string. Used on a JSON secret, the variable gets the whole JSON document.
+
+- `id` is used exactly as given. Give the **full** ARN, including the 6-character suffix Secrets
+  Manager adds to the name; a partial ARN is ambiguous to AWS.
+- `name` is resolved to the full ARN with `secretsmanager:DescribeSecret` — metadata only, the
+  value is never read — so the deploy role needs that permission on the secret. A name that
+  doesn't exist, or that the deploy role can't describe, fails the deploy.
+- `env` and `values` can't be combined; an `env` name that is already set by `envs` or another
+  `secrets_envs` entry fails the deploy.
+- `secrets_envs` is ignored whenever `secrets` is also set (long-standing behaviour); an `env`
+  entry in that situation fails the deploy instead of being dropped.
+- Works for the application container, sidecars, `services_overrides` and
+  `deployment_type: batch_job_definition`. As with every secret, the execution role needs
+  `secretsmanager:GetSecretValue` on it.
+
+See [examples/secrets-envs-whole-secret.yaml](../examples/secrets-envs-whole-secret.yaml).
 
 ## Secret Names Format (Auto-Discover Keys at Build Time)
 
