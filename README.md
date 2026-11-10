@@ -19,6 +19,7 @@ This GitHub Action automates the deployment of containerized applications to Ama
 - **Linux parameters configuration** (init process, capabilities, shared memory, devices)
 - **Template mode**: deploy from a Terraform-managed task definition, swapping only the image
 - **AWS Batch job definitions** from the same YAML (`deployment_type: batch_job_definition`)
+- **Choose what a service deploy waits for** (`wait_for: stable | healthy | none`), and wait for several deployments at once (`deployment_type: wait`)
 
 ## Deployment Types
 
@@ -36,21 +37,32 @@ Register a new revision of an AWS Batch job definition (`type: container`) from 
 
 | `deployment_type` | Registers | Name input | `ecs_cluster` | Then |
 |---|---|---|---|---|
-| `service` | ECS task definition | `ecs_service` | required | updates the service and waits for stability |
+| `service` | ECS task definition | `ecs_service` | required | updates the service and waits ([`wait_for`](docs/wait.md): stability by default) |
 | `scheduled_task` | ECS task definition | `task_name` | required | points the EventBridge rule at it |
 | `triggerable_task` | ECS task definition | `task_name` | required | nothing |
 | `batch_job_definition` | AWS Batch job definition | `task_name` | not used | optionally deregisters older revisions |
+| `wait` | nothing | `services` | required | waits until the listed ECS deployments complete ([docs/wait.md](docs/wait.md)) |
+
+### Waiting less on service deploys
+
+A `service` deploy waits for ECS's steady state by default, which includes draining the old tasks. Often that is
+minutes after the new revision started serving. With `wait_for: healthy`, the deploy returns as soon as the new
+revision serves: it is PRIMARY, all its tasks are running, and they pass their container health check and are
+healthy in their target groups. With `wait_for: none`, it returns right after the update. Either way, the deploy
+returns before ECS has finished, so end the workflow with one `deployment_type: wait` step on the `deployment_id`
+outputs: it waits for every deployment to complete, in parallel, and fails on a rollback. If you skip that step, a
+late circuit-breaker rollback shows up only in ECS. See [docs/wait.md](docs/wait.md).
 
 ## Inputs
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
 | `environment` | The environment to deploy to | Yes | - |
-| `deployment_type` | Deployment type: `service`, `scheduled_task`, `triggerable_task`, or `batch_job_definition` | No | `service` |
+| `deployment_type` | Deployment type: `service`, `scheduled_task`, `triggerable_task`, `batch_job_definition`, or `wait` | No | `service` |
 | `ecs_service` | The name of the ECS service (required when `deployment_type=service`) | No | - |
 | `task_name` | The name of the task (required when `deployment_type=scheduled_task` or `triggerable_task`); the job definition name for `batch_job_definition` | No | - |
-| `image_name` | The name of the Docker image | Yes | - |
-| `tag` | The tag of the Docker image | Yes | - |
+| `image_name` | The name of the Docker image | Yes** | - |
+| `tag` | The tag of the Docker image | Yes** | - |
 | `task_config_yaml` | Path to the YAML file containing task configuration (required when `task_definition_source=yaml`) | No | - |
 | `task_definition_source` | `yaml` (from `task_config_yaml`) or `template` (copy a Terraform-managed template task or job definition, see [Template Mode](docs/template.md)) | No | `yaml` |
 | `container_name` | Template mode, `service` only: the container whose image is replaced | No | `app` |
@@ -62,8 +74,12 @@ Register a new revision of an AWS Batch job definition (`type: container`) from 
 | `dry_run` | Whether to perform a dry run | No | `false` |
 | `ecr_registry` | Use ECR registry for main container image | No | `true` |
 | `propagate_tags` | Where the service copies tags from when launching tasks (service mode only): `SERVICE` or `NONE` | No | `SERVICE` |
+| `wait_for` | `service` only: `stable` (ECS steady state), `healthy` (the new revision serves) or `none` (return after the update). See [docs/wait.md](docs/wait.md) | No | `stable` |
+| `wait_timeout_minutes` | Whole minutes (1–360) to wait with `wait_for: stable` or `healthy`, and with `deployment_type: wait` | No | `30` |
+| `services` | `deployment_type: wait` only: newline- or comma-separated `name` or `name=<deployment_id>` | No | - |
 
 \* Not required for `deployment_type: batch_job_definition`.
+\** Not used by `deployment_type: wait`.
 
 ## Permissions
 
@@ -74,6 +90,8 @@ task role are in [docs/permissions.md](docs/permissions.md).
 
 | Output | Description |
 |---|---|
+| `task_definition_arn` | `service`, `scheduled_task`, `triggerable_task`: ARN of the task definition revision this run registered (empty on `dry_run`) |
+| `deployment_id` | `service` only: the ECS deployment id (`ecs-svc/…`) of that revision, for `deployment_type: wait` (empty on `dry_run`) |
 | `job_definition_arn` | `batch_job_definition` only: ARN of the registered job definition revision (empty on `dry_run`) |
 
 ## Example Usage

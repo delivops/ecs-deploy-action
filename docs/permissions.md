@@ -30,6 +30,8 @@ permission.
 | `ecs:RegisterTaskDefinition` | `*` | ✅ | ✅ | ✅ | |
 | `ecs:UpdateService`, `ecs:DescribeServices` | `arn:aws:ecs:<region>:<account>:service/<cluster>/<service>` | ✅ | | | |
 | `events:ListTargetsByRule`, `events:PutTargets` | `arn:aws:events:<region>:<account>:rule/<cluster>-<task>` | | ✅ | | |
+| `ecs:ListTasks` (condition `ecs:cluster`), `ecs:DescribeTasks` | `*` / `arn:aws:ecs:<region>:<account>:task/<cluster>/*` | `wait_for: healthy` | | | |
+| `elasticloadbalancing:DescribeTargetHealth` | `*` | `wait_for: healthy`, load-balanced | | | |
 | `iam:PassRole` on the execution and task roles | `arn:aws:iam::<account>:role/<exec-role>`, `…/<task-role>` | ✅ | ✅ | ✅ | ✅ |
 | `iam:PassRole` on the EventBridge target's role | the rule target's `RoleArn` | | ✅ | | |
 | `batch:RegisterJobDefinition` | `arn:aws:batch:<region>:<account>:job-definition/<task>`, `…/<task>:*` | | | | ✅ |
@@ -42,6 +44,11 @@ permission.
 - For the ECS types, `iam:PassRole` can be narrowed with the condition
   `"iam:PassedToService": "ecs-tasks.amazonaws.com"` (and `events.amazonaws.com` for the
   EventBridge role).
+- `wait_for: healthy` also reads the new tasks and their target health: `ecs:ListTasks`, `ecs:DescribeTasks` and
+  `elasticloadbalancing:DescribeTargetHealth` (see [wait.md](wait.md#iam)). Without them it checks
+  `runningCount` only, with a warning, instead of failing.
+- `deployment_type: wait` needs only `ecs:DescribeServices` on the listed services (not even
+  `ecr:GetAuthorizationToken`).
 - `dry_run: true` skips every registration and update, so it needs only `ecr:GetAuthorizationToken`
   and the YAML-dependent reads below.
 - [Template mode](template.md#iam) (`task_definition_source: template`) has its own list, for

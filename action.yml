@@ -6,7 +6,7 @@ inputs:
     description: 'The environment to deploy to'
     required: true
   deployment_type:
-    description: 'Deployment type: service, scheduled_task, triggerable_task, or batch_job_definition (registers an AWS Batch job definition revision)'
+    description: 'Deployment type: service, scheduled_task, triggerable_task, batch_job_definition (registers an AWS Batch job definition revision), or wait (deploys nothing: waits until the ECS deployments listed in services complete)'
     default: 'service'
     required: false
   ecs_service:
@@ -16,11 +16,11 @@ inputs:
     description: 'The name of the task (required when deployment_type=scheduled_task or triggerable_task); the job definition name for batch_job_definition'
     required: false
   image_name:
-    description: 'The name of the Docker image'
-    required: true
+    description: 'The name of the Docker image (required for every deployment_type except wait)'
+    required: false
   tag:
-    description: 'The tag of the Docker image'
-    required: true
+    description: 'The tag of the Docker image (required for every deployment_type except wait)'
+    required: false
   task_config_yaml:
     description: 'Path to the YAML file containing task configuration (required when task_definition_source=yaml)'
     required: false
@@ -61,8 +61,25 @@ inputs:
     description: 'The ECR registry URL'
     required: false
     default: 'true'
+  wait_for:
+    description: 'deployment_type=service only: what to wait for after updating the service. stable (the default): ECS steady state, as before. healthy: the new revision is serving (PRIMARY, all its tasks running, healthy in their container health check and target groups), without waiting for the old tasks to drain or for ECS to declare the deployment complete. none: return right after the update.'
+    default: 'stable'
+    required: false
+  wait_timeout_minutes:
+    description: 'Whole minutes (1-360) to wait with wait_for stable or healthy, and with deployment_type=wait'
+    default: '30'
+    required: false
+  services:
+    description: 'deployment_type=wait only: the services to wait for, newline- or comma-separated, each "name" (its current PRIMARY deployment) or "name=<deployment_id>" (the deployment_id output of an earlier run)'
+    required: false
 
 outputs:
+  task_definition_arn:
+    description: 'service, scheduled_task and triggerable_task: ARN of the task definition revision this run registered (empty on dry_run)'
+    value: ${{ steps.ecs-deploy-service.outputs.task-definition-arn || steps.register-task-def.outputs.task_definition_arn }}
+  deployment_id:
+    description: 'service only: the ECS deployment id (ecs-svc/...) of that revision, for deployment_type=wait to wait on exactly that deployment (empty on dry_run)'
+    value: ${{ steps.ecs-wait.outputs.deployment_id }}
   job_definition_arn:
     description: 'batch_job_definition only: ARN of the registered job definition revision (empty on dry_run)'
     value: ${{ steps.register-job-def.outputs.job_definition_arn }}
@@ -121,14 +138,49 @@ runs:
         fi
       shell: bash
 
+    # Only when a wait input is set or for deployment_type=wait, so callers using the defaults run no new step.
+    - id: validate-wait
+      if: ${{ inputs.wait_for != 'stable' || inputs.wait_timeout_minutes != '30' || inputs.deployment_type == 'wait' }}
+      env:
+        WAIT_FOR: ${{ inputs.wait_for }}
+        TIMEOUT: ${{ inputs.wait_timeout_minutes }}
+        DEPLOYMENT_TYPE: ${{ inputs.deployment_type }}
+        CLUSTER: ${{ inputs.ecs_cluster }}
+        SERVICES: ${{ inputs.services }}
+      run: |
+        if [ "$WAIT_FOR" != "stable" ] && [ "$WAIT_FOR" != "healthy" ] && [ "$WAIT_FOR" != "none" ]; then
+          echo "::error::wait_for must be 'stable', 'healthy' or 'none', got '$WAIT_FOR'"
+          exit 1
+        fi
+        if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || [ "$TIMEOUT" -lt 1 ] || [ "$TIMEOUT" -gt 360 ]; then
+          echo "::error::wait_timeout_minutes must be a whole number of minutes from 1 to 360, got '$TIMEOUT'"
+          exit 1
+        fi
+        if [ "$WAIT_FOR" != "stable" ] && [ "$DEPLOYMENT_TYPE" != "service" ]; then
+          echo "::error::wait_for applies to deployment_type=service only, got deployment_type '$DEPLOYMENT_TYPE'"
+          exit 1
+        fi
+        if [ "$DEPLOYMENT_TYPE" == "wait" ]; then
+          if [ -z "$CLUSTER" ] || [ -z "${SERVICES//[[:space:],]/}" ]; then
+            echo "::error::deployment_type=wait needs ecs_cluster and services"
+            exit 1
+          fi
+        elif [ -n "$SERVICES" ]; then
+          echo "::error::services is for deployment_type=wait only"
+          exit 1
+        fi
+      shell: bash
+
     - uses: aws-actions/configure-aws-credentials@v6
       with:
         role-to-assume: "arn:aws:iam::${{ inputs.aws_account_id }}:role/${{ inputs.aws_role }}"
         aws-region: ${{ inputs.aws_region }}
 
     - id: login_ecr
+      if: ${{ inputs.deployment_type != 'wait' }}
       uses: aws-actions/amazon-ecr-login@v2
     - id: define-registry
+      if: ${{ inputs.deployment_type != 'wait' }}
       run: |
         # Always set registry for OTEL/Fluent Bit (they're always ECR)
         echo "registry=${{ steps.login_ecr.outputs.registry }}" >> $GITHUB_OUTPUT
@@ -147,6 +199,7 @@ runs:
       shell: bash
 
     - id: determine-name
+      if: ${{ inputs.deployment_type != 'wait' }}
       run: |
         if [ "${{ inputs.deployment_type }}" == "scheduled_task" ] || [ "${{ inputs.deployment_type }}" == "triggerable_task" ] || [ "${{ inputs.deployment_type }}" == "batch_job_definition" ]; then
           echo "name=${{ inputs.task_name }}" >> $GITHUB_OUTPUT
@@ -156,7 +209,7 @@ runs:
       shell: bash
 
     - id: generate-task-def
-      if: ${{ inputs.task_definition_source == 'yaml' && inputs.deployment_type != 'batch_job_definition' }}
+      if: ${{ inputs.task_definition_source == 'yaml' && inputs.deployment_type != 'batch_job_definition' && inputs.deployment_type != 'wait' }}
       run: |
         python3 ${{ github.action_path }}/scripts/generate_task_def.py \
           "${{ inputs.task_config_yaml }}" \
@@ -224,15 +277,18 @@ runs:
         cluster: ${{ inputs.ecs_cluster }}
         # Empty leaves the service's desired count alone. For YAML callers this is exactly the old expression.
         desired-count: ${{ inputs.task_definition_source == 'template' && steps.template-task-def.outputs.replica_count || steps.generate-task-def.outputs.replica_count }}
-        wait-for-service-stability: true
+        # Default (stable): 'true' and 30, exactly as before these inputs existed.
+        wait-for-service-stability: ${{ inputs.wait_for == 'stable' }}
+        wait-for-minutes: ${{ inputs.wait_timeout_minutes }}
         # Preserve the Terraform-managed propagate_tags setting on the service.
         # amazon-ecs-deploy-task-definition always sends propagateTags in its
         # UpdateService call; when unset AWS treats it as NONE and silently resets
         # the service, wiping Terraform's SERVICE setting so tasks stop inheriting tags.
         propagate-tags: ${{ inputs.propagate_tags }}
         
+    # stable only; healthy and none check the new revision by ARN in ecs-wait below.
     - id: check-service-deployment
-      if: ${{ inputs.deployment_type == 'service' && inputs.dry_run == 'false' }}
+      if: ${{ inputs.deployment_type == 'service' && inputs.dry_run == 'false' && inputs.wait_for == 'stable' }}
       run: |
          CURRENT_TASK_DEF_ARN=$(aws ecs describe-services --cluster ${{ inputs.ecs_cluster }} --services ${{ inputs.ecs_service }} --query services[0].deployments[0].taskDefinition | jq -r ".")
          NEW_TASK_DEF_ARN=${{ steps.ecs-deploy-service.outputs.task-definition-arn }}
@@ -242,6 +298,38 @@ runs:
            echo "Deployment failed."
            exit 1
          fi
+      shell: bash
+
+    # Finds the deployment of the new revision by ARN and outputs its id. healthy: polls until it serves;
+    # none: checks it is PRIMARY; stable: only reads the id (a lookup problem is a warning, never a failure).
+    - id: ecs-wait
+      if: ${{ inputs.deployment_type == 'service' && inputs.dry_run == 'false' }}
+      env:
+        CLUSTER: ${{ inputs.ecs_cluster }}
+        SERVICE: ${{ inputs.ecs_service }}
+        TASK_DEFINITION_ARN: ${{ steps.ecs-deploy-service.outputs.task-definition-arn }}
+        WAIT_FOR: ${{ inputs.wait_for }}
+        TIMEOUT: ${{ inputs.wait_timeout_minutes }}
+        REGION: ${{ inputs.aws_region }}
+      run: |
+        python3 ${{ github.action_path }}/scripts/ecs_wait.py service \
+          --cluster "$CLUSTER" --service "$SERVICE" --task-definition-arn "$TASK_DEFINITION_ARN" \
+          --wait-for "$WAIT_FOR" --timeout-minutes "$TIMEOUT" --task-definition-file task-definition.json \
+          --region "$REGION"
+      shell: bash
+
+    # deployment_type=wait: deploys nothing, waits for the listed deployments to complete. Read-only, so dry_run
+    # doesn't skip it.
+    - id: wait-deployments
+      if: ${{ inputs.deployment_type == 'wait' }}
+      env:
+        CLUSTER: ${{ inputs.ecs_cluster }}
+        SERVICES: ${{ inputs.services }}
+        TIMEOUT: ${{ inputs.wait_timeout_minutes }}
+        REGION: ${{ inputs.aws_region }}
+      run: |
+        python3 ${{ github.action_path }}/scripts/ecs_wait.py deployments \
+          --cluster "$CLUSTER" --services "$SERVICES" --timeout-minutes "$TIMEOUT" --region "$REGION"
       shell: bash
 
     # Scheduled Task / Triggerable Task Deployment

@@ -351,10 +351,11 @@ def test_action_generate_step_unchanged():
         '  "${{ steps.determine-name.outputs.name }}"\n'
     )
     step = STEPS["generate-task-def"]
-    # batch_job_definition renders its own job definition instead; for every
-    # other deployment type the condition is the old one.
+    # batch_job_definition renders its own job definition instead and wait deploys
+    # nothing; for every other deployment type the condition is the old one.
     ok = step["run"] == expected and step["if"] == (
-        "${{ inputs.task_definition_source == 'yaml' && inputs.deployment_type != 'batch_job_definition' }}")
+        "${{ inputs.task_definition_source == 'yaml' && inputs.deployment_type != 'batch_job_definition'"
+        " && inputs.deployment_type != 'wait' }}")
     return ok, repr(step["run"])
 
 
