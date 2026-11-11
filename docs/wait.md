@@ -27,6 +27,8 @@ list) must meet all of the following:
 
 - it is **PRIMARY**, and its `rolloutState` is not `FAILED`;
 - its `runningCount` reaches the service's `desiredCount` (a service with a desired count of 0 is done at once);
+- every task of the deployment has been `RUNNING` for at least 10 s. A container that crashes on start is RUNNING
+  for an instant first, and without this rule a poll could land on that instant and call it serving;
 - if an essential container in the task definition has a `healthCheck`: every task of the deployment reports
   `healthStatus: HEALTHY`;
 - if the service has load balancers: every task of the deployment is `healthy` in each target group (matched by
@@ -45,12 +47,16 @@ Failures:
 
 Fallbacks, each with a warning instead of a failure:
 
-- `ecs:ListTasks` or `ecs:DescribeTasks` is denied: only `runningCount` is checked (no container or target health).
+- `ecs:ListTasks` or `ecs:DescribeTasks` is denied: only `runningCount` is checked, on two polls in a row (no task
+  uptime, container or target health).
 - `elasticloadbalancing:DescribeTargetHealth` is denied: target health is not checked.
 - The tasks have no ENI (`bridge` or `host` network mode, instance targets), or the service uses a classic load
   balancer: that load balancer is not checked.
 
 ### The trade-off
+
+`healthy` catches a revision that crashes on start. It does not catch one that crashes a minute later, or one that
+serves errors while passing its checks: by then the step has returned.
 
 `healthy` and `none` return **before ECS has finished the deployment**. The circuit breaker (if enabled) keeps
 protecting the rollout, but a rollback that happens after the step has returned shows up only in ECS, not in the

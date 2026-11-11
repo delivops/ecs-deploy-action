@@ -22,6 +22,7 @@ drive them with recorded responses and a fake clock.
 """
 
 import argparse
+import datetime
 import json
 import os
 import sys
@@ -32,6 +33,9 @@ DEPLOYMENTS_POLL_SECONDS = 10
 DESCRIBE_SERVICES_MAX = 10   # DescribeServices takes at most 10 services
 DESCRIBE_TASKS_MAX = 100     # DescribeTasks takes at most 100 tasks
 EVENTS_SHOWN = 5
+# A task must have been RUNNING this long before it counts. A container that crashes on start (bad config, a missing
+# variable: the usual broken deploy) is RUNNING for an instant first, and a poll can land on that instant.
+MIN_TASK_UPTIME_SECONDS = 10
 
 ACCESS_DENIED = {"AccessDenied", "AccessDeniedException", "UnauthorizedOperation", "UnauthorizedException"}
 
@@ -184,7 +188,10 @@ def has_container_health_check(task_definition):
 class ServingCheck:
     """One poll of "is the new revision serving?". Keeps the warnings it has already given across polls."""
 
-    def __init__(self, ecs, elbv2, cluster, service_name, task_definition_arn, health_check):
+    def __init__(self, ecs, elbv2, cluster, service_name, task_definition_arn, health_check,
+                 now=lambda: datetime.datetime.now(datetime.timezone.utc)):
+        self.now = now
+        self.running_polls = 0      # consecutive polls at running == desired, for the ListTasks-denied fallback
         self.ecs = ecs
         self.elbv2 = elbv2
         self.cluster = cluster
@@ -246,23 +253,29 @@ class ServingCheck:
         if desired == 0:
             return True, "desired count is 0"
         if running < desired:
+            self.running_polls = 0
             return False, f"running {running}/{desired}"
-
-        needs_tasks = self.health_check or bool(service.get("loadBalancers"))
-        if not needs_tasks:
-            return True, f"running {running}/{desired}"
+        self.running_polls += 1
 
         try:
             tasks = list_deployment_tasks(self.ecs, self.cluster, deployment["id"], "RUNNING")
         except Exception as error:  # noqa: BLE001
             if not is_access_denied(error):
                 raise
-            self.warn_once("tasks", "ecs:ListTasks/ecs:DescribeTasks denied; checking runningCount only, not task "
-                           f"or target health ({error})")
-            return True, f"running {running}/{desired} (task health not checked)"
+            self.warn_once("tasks", "ecs:ListTasks/ecs:DescribeTasks denied; checking runningCount only (on two "
+                           f"polls in a row), not task uptime, container or target health ({error})")
+            if self.running_polls < 2:
+                return False, f"running {running}/{desired}, confirming on the next poll"
+            return True, f"running {running}/{desired} (tasks not checked)"
         tasks = [t for t in tasks if t.get("lastStatus") == "RUNNING"]
         if len(tasks) < desired:
             return False, f"running {len(tasks)}/{desired} tasks listed"
+
+        now = self.now()
+        young = [t for t in tasks if not hasattr(t.get("startedAt"), "timestamp")
+                 or (now - t["startedAt"]).total_seconds() < MIN_TASK_UPTIME_SECONDS]
+        if young:
+            return False, f"running {len(tasks)}/{desired}, {len(young)} up for less than {MIN_TASK_UPTIME_SECONDS} s"
 
         if self.health_check:
             unhealthy = [t for t in tasks if t.get("healthStatus") != "HEALTHY"]

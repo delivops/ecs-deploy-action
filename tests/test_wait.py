@@ -94,7 +94,7 @@ def service(name, deployments, desired, lbs=None, breaker=True, controller="ECS"
 
 
 def task(task_id, dep_id, arn, last="RUNNING", health="UNKNOWN", ip="10.0.1.10", stopped_reason=None,
-         exit_code=None):
+         exit_code=None, started=-60):
     t = {
         "taskArn": f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/{task_id}",
         "taskDefinitionArn": arn,
@@ -103,6 +103,7 @@ def task(task_id, dep_id, arn, last="RUNNING", health="UNKNOWN", ip="10.0.1.10",
         "desiredStatus": "RUNNING" if last != "STOPPED" else "STOPPED",
         "healthStatus": health,
         "launchType": "FARGATE",
+        "startedAt": T0 + datetime.timedelta(seconds=started),
         "attachments": [{
             "id": f"att-{task_id}", "type": "ElasticNetworkInterface", "status": "ATTACHED",
             "details": [
@@ -143,7 +144,8 @@ class FakeAWS:
     """frames: [{"services": {name: service}, "tasks": {(dep_id, status): [task]}, "targets": {tg: {(ip, port): state}}}]
 
     Each DescribeServices call moves to the next frame (the last one repeats); the other calls read the current
-    frame. deny: names of operations that raise AccessDenied."""
+    frame. A frame without "tasks" has, for each deployment, runningCount RUNNING tasks started a minute before T0.
+    deny: names of operations that raise AccessDenied."""
 
     def __init__(self, frames, deny=()):
         self.frames = frames
@@ -166,18 +168,29 @@ class FakeAWS:
             "failures": [{"arn": n, "reason": "MISSING"} for n in services if n not in known],
         }
 
+    def frame_tasks(self):
+        if "tasks" in self.frame:
+            return self.frame["tasks"]
+        derived = {}
+        for svc in self.frame["services"].values():
+            for dep in svc["deployments"]:
+                derived[(dep["id"], "RUNNING")] = [
+                    task(f"{dep['id'][-4:]}-{i}", dep["id"], dep["taskDefinition"], ip=f"10.0.9.{i}")
+                    for i in range(dep["runningCount"])]
+        return derived
+
     def list_tasks(self, cluster, startedBy, desiredStatus, nextToken=None):
         self.calls.append(("list_tasks", startedBy, desiredStatus))
         if "ListTasks" in self.deny:
             raise access_denied("ListTasks")
-        tasks = self.frame.get("tasks", {}).get((startedBy, desiredStatus), [])
+        tasks = self.frame_tasks().get((startedBy, desiredStatus), [])
         return {"taskArns": [t["taskArn"] for t in tasks]}
 
     def describe_tasks(self, cluster, tasks):
         self.calls.append(("describe_tasks", len(tasks)))
         if "DescribeTasks" in self.deny:
             raise access_denied("DescribeTasks")
-        everything = [t for ts in self.frame.get("tasks", {}).values() for t in ts]
+        everything = [t for ts in self.frame_tasks().values() for t in ts]
         return {"tasks": [copy.deepcopy(t) for t in everything if t["taskArn"] in tasks], "failures": []}
 
     def describe_target_health(self, TargetGroupArn, Targets):
@@ -205,8 +218,10 @@ def quiet():
         yield out
 
 
-def check(aws, svc_name="api", health_check=False):
-    return ew.ServingCheck(aws, aws, CLUSTER, svc_name, NEW_ARN, health_check)
+def check(aws, svc_name="api", health_check=False, clock=None):
+    """The wall clock starts at T0 and follows the fake clock."""
+    return ew.ServingCheck(aws, aws, CLUSTER, svc_name, NEW_ARN, health_check,
+                           now=lambda: T0 + datetime.timedelta(seconds=clock.now if clock else 0))
 
 
 def expect_wait_error(fn, *needles):
@@ -240,7 +255,7 @@ def test_single_task_no_lb_no_health_check():
         ew.wait_until_serving(check(aws), 1800, clock=clock, sleep=clock.sleep)
     assert clock.now == 10, clock.now          # two 5 s polls
     assert clock.sleeps == [5, 5]
-    assert aws.count("list_tasks") == 0        # no LB, no health check: nothing per task to look at
+    assert aws.count("describe_target_health") == 0
 
 
 def test_rolling_returns_while_old_task_drains():
@@ -306,12 +321,53 @@ def test_alb_target_health_denied_falls_back():
     assert "::warning::elasticloadbalancing:DescribeTargetHealth denied" in out.getvalue()
 
 
-def test_list_tasks_denied_falls_back():
+def test_list_tasks_denied_falls_back_to_two_polls():
     frames = [{"services": {"api": alb_service()}}]
     aws, clock = FakeAWS(frames, deny={"ListTasks"}), Clock()
     with quiet() as out:
         ew.wait_until_serving(check(aws, health_check=True), 1800, clock=clock, sleep=clock.sleep)
     assert "::warning::ecs:ListTasks/ecs:DescribeTasks denied" in out.getvalue()
+    assert out.getvalue().count("::warning::") == 1
+    assert clock.now == 5                            # running == desired confirmed on a second poll
+
+
+def test_list_tasks_denied_resets_on_a_drop():
+    up = {"services": {"api": service("api", [deployment(NEW_DEP, NEW_ARN, "PRIMARY", 1, 1)], 1)}}
+    down = {"services": {"api": service("api", [deployment(NEW_DEP, NEW_ARN, "PRIMARY", 1, 0)], 1)}}
+    aws, clock = FakeAWS([up, down, up, up], deny={"ListTasks"}), Clock()
+    with quiet():
+        ew.wait_until_serving(check(aws, clock=clock), 1800, clock=clock, sleep=clock.sleep)
+    assert clock.now == 15
+
+
+def test_crash_on_start_is_not_serving():
+    """Seen live: a container that exits at once is RUNNING for an instant, and runningCount can catch it."""
+    svc = service("api", [deployment(NEW_DEP, NEW_ARN, "PRIMARY", 1, 1),
+                          deployment(OLD_DEP, OLD_ARN, "ACTIVE", 0, 0, rollout="COMPLETED")], 1)
+    crashed = service("api", [deployment(NEW_DEP, NEW_ARN, "PRIMARY", 1, 0, failed=1),
+                              deployment(OLD_DEP, OLD_ARN, "ACTIVE", 0, 0, rollout="COMPLETED")], 1)
+    rolled_back = rollback_frames()[1]
+    frames = [
+        {"services": {"api": svc}, "tasks": {(NEW_DEP, "RUNNING"): [task("bad1", NEW_DEP, NEW_ARN, started=0)]}},
+        {"services": {"api": crashed}, "tasks": {(NEW_DEP, "STOPPED"): [
+            task("bad1", NEW_DEP, NEW_ARN, last="STOPPED", stopped_reason="Essential container in task exited",
+                 exit_code=1)]}},
+        rolled_back,
+    ]
+    aws, clock = FakeAWS(frames), Clock()
+    with quiet() as out:
+        expect_wait_error(lambda: ew.wait_until_serving(check(aws, clock=clock), 1800, clock=clock, sleep=clock.sleep),
+                          "FAILED")
+    assert "up for less than 10 s" in out.getvalue()
+
+
+def test_young_task_counts_once_up_for_ten_seconds():
+    svc = service("api", [deployment(NEW_DEP, NEW_ARN, "PRIMARY", 1, 1)], 1)
+    frames = [{"services": {"api": svc}, "tasks": {(NEW_DEP, "RUNNING"): [task("new1", NEW_DEP, NEW_ARN, started=-2)]}}]
+    aws, clock = FakeAWS(frames), Clock()
+    with quiet():
+        ew.wait_until_serving(check(aws, clock=clock), 1800, clock=clock, sleep=clock.sleep)
+    assert clock.now == 10                           # started 2 s before: up 2 s, 7 s (pending), 12 s (serving)
 
 
 def test_bridge_tasks_without_ip_skip_target_health():
