@@ -41,6 +41,9 @@ jobs:
     - name: Run whole-secret tests
       run: python tests/test_secrets.py
 
+    - name: Run wait tests
+      run: python tests/test_wait.py
+
     - name: Run task definition tests
       # Deliberately without UPDATE_EXPECTED, so a missing expected output fails
       # the build instead of being fabricated here and auto-committed - which
@@ -81,3 +84,4 @@ jobs:
         python tests/test_batch.py
         python tests/test_batch_template.py
         python tests/test_secrets.py
+        python tests/test_wait.py
